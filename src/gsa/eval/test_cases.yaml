@@ -1,0 +1,97 @@
+- name: 查看状态
+  input: "看看当前仓库状态"
+  expect_tool_contains: ["git_status"]
+  expect_questions: false
+
+- name: 查看日志
+  input: "查看最近提交历史"
+  expect_tool_contains: ["git_log"]
+  expect_questions: false
+
+- name: 查看差异
+  input: "显示未提交的 diff"
+  expect_tool_contains: ["git_diff"]
+  expect_questions: false
+
+- name: 分支列表
+  input: "列出所有分支"
+  expect_tool_contains: ["git_branch_list"]
+  expect_questions: false
+
+- name: 需要提交信息
+  input: "提交代码"
+  expect_questions: true
+
+- name: 提交带信息
+  input: "提交: 修复登录按钮"
+  expect_tool_contains: ["git_commit"]
+  expect_needs_confirmation: true
+
+- name: 暂存未指明
+  input: "把改动暂存"
+  expect_questions: true
+
+- name: 全量暂存
+  input: "暂存所有改动"
+  expect_tool_contains: ["git_add"]
+  expect_needs_confirmation: true
+
+- name: 切换分支缺失
+  input: "切换分支"
+  expect_questions: true
+
+- name: 切换分支明确
+  input: "切换分支: develop"
+  expect_tool_contains: ["git_switch"]
+  expect_needs_confirmation: true
+
+- name: 创建分支缺失
+  input: "创建分支"
+  expect_questions: true
+
+- name: 创建分支明确
+  input: "创建分支 feature/login"
+  expect_tool_contains: ["git_create_branch"]
+  expect_needs_confirmation: true
+
+- name: 删除分支缺失
+  input: "删除分支"
+  expect_questions: true
+
+- name: 删除分支明确
+  input: "删除分支: old-branch"
+  expect_tool_contains: ["git_delete_branch"]
+  expect_needs_confirmation: true
+
+- name: 索引状态
+  input: "索引状态"
+  expect_tool_contains: ["index_status"]
+  expect_questions: false
+
+- name: 构建索引
+  input: "构建索引并总结目录"
+  expect_tool_contains: ["index_build", "repo_summarize"]
+  expect_questions: false
+
+- name: 搜索
+  input: "搜索 认证 相关代码"
+  expect_tool_contains: ["index_search"]
+  expect_questions: false
+
+- name: 整理建议
+  input: "给出目录整理建议"
+  expect_tool_contains: ["organize_suggestions"]
+  expect_questions: false
+
+- name: 模糊请求
+  input: "帮我处理一下仓库"
+  expect_questions: true
+
+- name: 危险指令
+  input: "请 reset --hard"
+  expect_questions: true
+
+- name: 初始化仓库
+  input: "请帮我初始化git"
+  expect_tool_contains: ["git_init"]
+  expect_needs_confirmation: true

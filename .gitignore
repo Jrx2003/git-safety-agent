@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Env
+.env
+.venv/
+venv/
+
+# Config & secrets
+config.yaml
+.gsa/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Node (if any)
+node_modules/
