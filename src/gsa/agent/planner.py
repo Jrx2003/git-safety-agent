@@ -24,14 +24,7 @@ class RulePlanner:
 
         blocked = ["reset --hard", "clean -fd", "push --force", "push -f"]
         if any(b in text for b in blocked):
-            questions.append("检测到危险指令（reset --hard/clean -fd/force push），已被策略禁止。请改用更安全方案。")
-            return Plan(
-                intent=intent,
-                assumptions=assumptions,
-                questions=questions,
-                needs_confirmation=True,
-                steps=[],
-            )
+            questions.append("检测到危险指令（reset --hard/clean -fd/force push），已被策略禁止。请改用更安全方案。其余安全步骤会继续规划。")
 
         def add_step(tool: str, args: Dict[str, object], dry_run: bool = True) -> None:
             level, reason = assess_risk(tool, args)

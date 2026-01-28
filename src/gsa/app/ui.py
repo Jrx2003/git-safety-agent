@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import re
 import uuid
 from typing import Any, Dict, List, Optional
@@ -91,13 +90,6 @@ def render_messages() -> None:
     for msg in st.session_state.get("messages", []):
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
-
-
-def _llm_status_text(workspace: str) -> str:
-    cfg = load_config(workspace)
-    if cfg.api_key:
-        return "LLM 已配置（glm-4.7 / zai-sdk）"
-    return "LLM 未配置，请设置 BIGMODEL_API_KEY"
 
 
 def _friendly_error(errors: List[str], has_plan: bool) -> Optional[str]:
@@ -285,71 +277,99 @@ def _handle_quick_action(orch: Orchestrator, action: str) -> None:
 
 def main():
     st.title("Git Safety Agent")
-
+    st.markdown(
+        """
+        <style>
+        section[data-testid="stSidebar"] { width: 360px !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     if "workspace" not in st.session_state:
         st.session_state["workspace"] = _default_workspace()
     workspace = st.session_state["workspace"]
 
     orch = get_orchestrator(workspace)
+    pending_request = st.session_state.get("pending_request")
+    pending_request_handled = st.session_state.get("pending_request_handled", False)
+    pending_quick = st.session_state.get("pending_quick_action")
+    pending_quick_handled = st.session_state.get("pending_quick_action_handled", False)
+    busy = bool(
+        st.session_state.get("processing", False)
+        or (pending_request and not pending_request_handled)
+        or (pending_quick and not pending_quick_handled)
+    )
 
     with st.sidebar:
-        st.header("工作区")
-        st.caption(f"当前：{workspace}")
-        st.caption(f"Python：{sys.executable}")
-        ws_input = st.text_input("切换工作区", value=workspace)
-        if st.button("应用工作区"):
-            if not os.path.isdir(ws_input):
-                st.error("路径不存在或不可访问")
-            else:
-                st.session_state["workspace"] = ws_input
-                st.cache_data.clear()
+        with st.expander("模型配置", expanded=True):
+            cfg = load_config(workspace)
+            base_options = {
+                "国内（open.bigmodel.cn）": "https://open.bigmodel.cn/api/paas/v4/",
+                "海外（api.z.ai）": "https://api.z.ai/api/paas/v4/",
+            }
+            current_url = st.session_state.get("base_url_override") or cfg.base_url
+            base_index = 0 if "open.bigmodel.cn" in current_url else 1
+            col_a, col_b = st.columns(2)
+            with col_a:
+                base_label = st.selectbox("接口地址", list(base_options.keys()), index=base_index)
+            with col_b:
+                model = st.selectbox(
+                    "模型选择",
+                    ["glm-4.7", "glm-4.7-flash"],
+                    index=0 if cfg.model == "glm-4.7" else 1,
+                )
+            selected_url = base_options[base_label]
+            st.session_state["base_url_override"] = selected_url
+            os.environ["BIGMODEL_BASE_URL"] = selected_url
+            orch.planner.set_base_url(selected_url)
+            orch.planner.set_model(model)
+
+        with st.expander("对话", expanded=True):
+            chat_mode = st.radio(
+                "模式",
+                ["计划执行", "索引问答"],
+                horizontal=True,
+            )
+            st.session_state["chat_mode"] = chat_mode
+            col_q1, col_q2 = st.columns(2)
+            with col_q1:
+                if st.button("一键仓库概览"):
+                    append_message("user", "一键仓库概览")
+                    st.session_state["pending_quick_action"] = {"id": uuid.uuid4().hex, "action": "repo_summarize"}
+                    st.session_state["pending_quick_action_handled"] = False
+                    st.rerun()
+            with col_q2:
+                if st.button("一键整理建议"):
+                    append_message("user", "一键整理建议")
+                    st.session_state["pending_quick_action"] = {"id": uuid.uuid4().hex, "action": "organize_suggestions"}
+                    st.session_state["pending_quick_action_handled"] = False
+                    st.rerun()
+
+            with st.form("sidebar_chat", clear_on_submit=True, border=False):
+                user_input = st.text_input("输入自然语言任务", placeholder="输入自然语言任务...", disabled=busy, label_visibility="collapsed")
+                send = st.form_submit_button("发送", disabled=busy, use_container_width=True)
+            if send and user_input.strip():
+                prefix = "计划执行" if chat_mode == "计划执行" else "索引问答"
+                append_message("user", f"{prefix}：{user_input}")
+                st.session_state["pending_request"] = {
+                    "id": uuid.uuid4().hex,
+                    "input": user_input,
+                    "mode": chat_mode,
+                }
+                st.session_state["pending_request_handled"] = False
                 st.rerun()
 
-        st.caption(_llm_status_text(workspace))
-        cfg = load_config(workspace)
-        base_options = {
-            "国内（open.bigmodel.cn）": "https://open.bigmodel.cn/api/paas/v4/",
-            "海外（api.z.ai）": "https://api.z.ai/api/paas/v4/",
-        }
-        current_url = st.session_state.get("base_url_override") or cfg.base_url
-        base_index = 0 if "open.bigmodel.cn" in current_url else 1
-        base_label = st.selectbox("接口地址", list(base_options.keys()), index=base_index)
-        selected_url = base_options[base_label]
-        st.session_state["base_url_override"] = selected_url
-        os.environ["BIGMODEL_BASE_URL"] = selected_url
-        orch.planner.set_base_url(selected_url)
-        st.caption(f"Base URL: {selected_url}")
-        model = st.selectbox(
-            "模型选择",
-            ["glm-4.7", "glm-4.7-flash"],
-            index=0 if cfg.model == "glm-4.7" else 1,
-        )
-        orch.planner.set_model(model)
+        with st.expander("工作区", expanded=False):
+            st.caption(f"当前：{workspace}")
+            ws_input = st.text_input("切换工作区", value=workspace)
+            if st.button("应用工作区"):
+                if not os.path.isdir(ws_input):
+                    st.error("路径不存在或不可访问")
+                else:
+                    st.session_state["workspace"] = ws_input
+                    st.cache_data.clear()
+                    st.rerun()
 
-        st.divider()
-        st.header("对话模式")
-        chat_mode = st.radio(
-            "模式",
-            ["计划执行", "索引问答"],
-            horizontal=False,
-        )
-        st.session_state["chat_mode"] = chat_mode
-        if st.button("一键仓库概览"):
-            append_message("user", "一键仓库概览")
-            st.session_state["pending_quick_action"] = {"id": uuid.uuid4().hex, "action": "repo_summarize"}
-            st.session_state["pending_quick_action_handled"] = False
-            st.rerun()
-        if st.button("一键整理建议"):
-            append_message("user", "一键整理建议")
-            st.session_state["pending_quick_action"] = {"id": uuid.uuid4().hex, "action": "organize_suggestions"}
-            st.session_state["pending_quick_action_handled"] = False
-            st.rerun()
-
-        if orch.memory.persist.common_workspaces:
-            st.caption("常用工作区")
-            st.code("\n".join(orch.memory.persist.common_workspaces[-5:]))
-
-        st.divider()
         with st.expander("目录结构", expanded=False):
             query = st.text_input("快速搜索路径")
             preview_enabled = st.checkbox("启用文件预览", value=True)
@@ -362,7 +382,6 @@ def main():
             tree = build_tree(items)
             render_tree(tree)
 
-        st.divider()
         with st.expander("Git 历史", expanded=False):
             n = st.slider("提交数量", 5, 80, 30)
             branch = st.text_input("分支过滤（可选）", value="")
@@ -381,7 +400,7 @@ def main():
         else:
             st.markdown(
                 """
-                <div style="text-align:center;padding:2rem 0;">
+                <div style="text-align:center;padding:6rem 0 3rem;">
                   <h3>欢迎使用 Git Safety Agent</h3>
                   <p>输入自然语言指令，我会先规划再执行，确保操作可控可回溯。</p>
                   <p>你可以尝试：</p>
@@ -392,32 +411,27 @@ def main():
                 unsafe_allow_html=True,
             )
 
-        user_input = st.chat_input("输入自然语言任务...")
-        if user_input:
-            chat_mode = st.session_state.get("chat_mode", "计划执行")
-            prefix = "计划执行" if chat_mode == "计划执行" else "索引问答"
-            append_message("user", f"{prefix}：{user_input}")
-            st.session_state["pending_request"] = {
-                "id": uuid.uuid4().hex,
-                "input": user_input,
-                "mode": chat_mode,
-            }
-            st.session_state["pending_request_handled"] = False
-            st.rerun()
-
-        if st.session_state.get("pending_request") and not st.session_state.get("pending_request_handled"):
+        if pending_request and not pending_request_handled:
             req = st.session_state.get("pending_request", {})
+            st.session_state["processing"] = True
             try:
                 _handle_chat_request(orch, req.get("input", ""), req.get("mode", "计划执行"))
             finally:
+                st.session_state["processing"] = False
                 st.session_state["pending_request_handled"] = True
+                st.session_state["pending_request"] = None
+                st.session_state["post_handle_rerun"] = True
 
-        if st.session_state.get("pending_quick_action") and not st.session_state.get("pending_quick_action_handled"):
+        if pending_quick and not pending_quick_handled:
             qa = st.session_state.get("pending_quick_action", {})
+            st.session_state["processing"] = True
             try:
                 _handle_quick_action(orch, qa.get("action", ""))
             finally:
+                st.session_state["processing"] = False
                 st.session_state["pending_quick_action_handled"] = True
+                st.session_state["pending_quick_action"] = None
+                st.session_state["post_handle_rerun"] = True
 
         suggestions = st.session_state.get("last_suggestions")
         if suggestions:
@@ -448,52 +462,81 @@ def main():
                                 append_message("assistant", msg2)
 
         plan_result = st.session_state.get("last_plan_result")
+        selected_plan = None
         if plan_result and plan_result.plan:
             with st.expander("查看计划 JSON", expanded=False):
                 st.json(plan_result.plan.model_dump())
 
             st.subheader("执行控制")
+            st.caption("选择要执行的步骤（可多选）")
+            selected_indices: List[int] = []
+            for i, step in enumerate(plan_result.plan.steps):
+                key = f"step_select_{plan_result.trace_id}_{i}"
+                label = f"{i+1}. {step.tool}｜风险：{step.safety_level}｜原因：{step.safety_reason}"
+                checked = st.checkbox(label, value=True, key=key)
+                if checked:
+                    selected_indices.append(i)
+
+            if selected_indices:
+                selected_steps = [s for idx, s in enumerate(plan_result.plan.steps) if idx in selected_indices]
+                needs_confirm = any(s.safety_level in {"medium", "high"} for s in selected_steps)
+                selected_plan = plan_result.plan.model_copy(
+                    update={"steps": selected_steps, "needs_confirmation": needs_confirm}
+                )
+            else:
+                st.warning("请至少选择一条步骤再执行。")
+
             confirmed = st.checkbox("我已阅读风险并确认执行（YES）", value=False)
             col_run, col_dry = st.columns(2)
             with col_run:
-                if st.button("执行计划"):
+                if st.button("执行计划", disabled=not selected_plan):
                     with st.spinner("执行中..."):
-                        exec_res = orch.execute(plan_result.plan, plan_result.trace_id, confirmed=confirmed)
+                        exec_res = orch.execute(selected_plan, plan_result.trace_id, confirmed=confirmed)
                         st.session_state["exec_result"] = exec_res
             with col_dry:
-                if st.button("仅试运行"):
+                if st.button("仅试运行", disabled=not selected_plan):
                     with st.spinner("试运行中..."):
-                        exec_res = orch.execute(plan_result.plan, plan_result.trace_id, confirmed=False)
+                        exec_res = orch.execute(selected_plan, plan_result.trace_id, confirmed=False)
                         st.session_state["exec_result"] = exec_res
 
-        exec_result = st.session_state.get("exec_result")
-        if exec_result:
-            st.subheader("执行结果")
-            st.json(exec_result)
-            st.subheader("标准输出/错误摘要")
+    exec_result = st.session_state.get("exec_result")
+    if exec_result:
+        st.subheader("执行结果")
+        st.info(exec_result.get("summary", ""))
+        st.caption("执行明细")
+        for item in exec_result.get("results", []):
+            tool = item.get("tool", "")
+            ok = item.get("ok", False)
+            st.write(f"- {tool}：{'成功' if ok else '失败'}")
+        with st.expander("错误摘要", expanded=False):
+            has_error = False
             for item in exec_result.get("results", []):
                 tool = item.get("tool", "")
-                result = item.get("result", {}) if item.get("ok") else {}
-                stdout = result.get("stdout")
-                stderr = result.get("stderr")
-                if stdout or stderr:
+                if not item.get("ok"):
                     st.markdown(f"**{tool}**")
-                    if stdout:
-                        st.code(stdout, language="text")
-                    if stderr:
-                        st.code(stderr, language="text")
-            st.info(f"trace_id: {exec_result.get('trace_id')}")
-            log_path = os.path.join(orch.workspace, ".gsa", "logs")
-            st.info(f"日志目录：{log_path}")
-            try:
-                files = sorted(os.listdir(log_path))
-                if files:
-                    latest = os.path.join(log_path, files[-1])
-                    with open(latest, "r", encoding="utf-8") as f:
-                        lines = f.read().splitlines()[-50:]
-                    st.code("\n".join(lines), language="json")
-            except Exception:
-                pass
+                    st.write(item.get("error", "未知错误"))
+                    has_error = True
+                    continue
+                result = item.get("result", {})
+                stderr = result.get("stderr")
+                if stderr:
+                    st.markdown(f"**{tool}**")
+                    st.code(stderr, language="text")
+                    has_error = True
+            if not has_error:
+                st.write("无错误。")
+        st.info(f"trace_id: {exec_result.get('trace_id')}")
+        log_path = os.path.join(orch.workspace, ".gsa", "logs")
+        st.info(f"日志目录：{log_path}")
+        try:
+            files = sorted(os.listdir(log_path))
+            if files:
+                latest = os.path.join(log_path, files[-1])
+                with open(latest, "r", encoding="utf-8") as f:
+                    lines = f.read().splitlines()[-50:]
+                st.code("\n".join(lines), language="json")
+        except Exception:
+            pass
 
         if st.session_state.get("need_index"):
             st.subheader("索引提示")
@@ -516,6 +559,10 @@ def main():
                 st.write(msg)
                 append_message("assistant", msg)
 
+        if st.session_state.get("post_handle_rerun"):
+            st.session_state["post_handle_rerun"] = False
+            st.rerun()
+
     preview_enabled = st.session_state.get("preview_enabled", True)
     preview_path = st.session_state.get("preview_file", "")
     if preview_enabled and preview_path:
@@ -529,7 +576,7 @@ def main():
             if not text:
                 st.info("文件为空或无法显示（可能为二进制或内容过大）。")
             else:
-                st.code(text, language="text")
+                st.text_area("文件内容预览", text, height=260, disabled=True, label_visibility="collapsed")
 
 
 if __name__ == "__main__":
