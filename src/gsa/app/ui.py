@@ -187,6 +187,23 @@ def _build_qa_markdown(answer: str, sources: List[str], snippets: List[Dict[str,
     return "\n\n".join(blocks)
 
 
+def _filter_plan_for_mode(plan, mode: str):
+    if not plan or mode != "计划执行":
+        return plan, []
+    removed = []
+    kept = []
+    for step in plan.steps:
+        if step.tool.startswith("index_") or step.tool in {"repo_summarize", "organize_suggestions"}:
+            removed.append(step)
+        else:
+            kept.append(step)
+    if not removed:
+        return plan, []
+    needs_confirm = any(s.safety_level in {"medium", "high"} for s in kept)
+    filtered = plan.model_copy(update={"steps": kept, "needs_confirmation": needs_confirm})
+    return filtered, removed
+
+
 def _handle_chat_request(orch: Orchestrator, user_input: str, chat_mode: str) -> None:
     pending_questions = st.session_state.get("pending_questions")
     base_input = st.session_state.get("pending_base_input", "")
@@ -221,6 +238,10 @@ def _handle_chat_request(orch: Orchestrator, user_input: str, chat_mode: str) ->
 
     orch.use_llm = True
     result = orch.plan(combined)
+    if result.plan:
+        filtered, removed = _filter_plan_for_mode(result.plan, chat_mode)
+        if removed:
+            result.plan = filtered
     st.session_state["last_plan_result"] = result
 
     msg = _friendly_error(result.errors, has_plan=bool(result.plan))
@@ -464,9 +485,9 @@ def main():
                 append_message("assistant", "正在规划...", fmt="status")
                 prompt = "以下是整理建议，请生成可执行的计划步骤：\n" + suggestions
                 st.session_state["suggestions_consumed"] = True
+                st.session_state["suggestions_prompt_shown"] = True
                 st.session_state["pending_chat"] = {"mode": "计划执行", "input": prompt}
                 st.rerun()
-            st.session_state["suggestions_prompt_shown"] = True
 
         plan_result = st.session_state.get("last_plan_result")
         selected_plan = None
