@@ -57,6 +57,7 @@ class MCPServer:
         self.registry.register("index_search", "索引搜索", self.index_tool.search)
         self.registry.register("repo_summarize", "仓库概览", self.index_tool.repo_summarize)
         self.registry.register("organize_suggestions", "整理建议", self.index_tool.organize_suggestions)
+        self.registry.register("index_qa", "索引问答", self.index_tool.qa)
 
     def handle(self, request: Dict[str, Any]) -> Dict[str, Any]:
         method = request.get("method")

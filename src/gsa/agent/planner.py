@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from typing import Dict, List, Optional
 
 from gsa.agent.schema import Plan, PlanResult, Step
@@ -48,9 +49,10 @@ class RulePlanner:
             )
 
         # 只读类
+        wants_log = bool(re.search(r"日志|log|历史|最近提交|提交历史|提交记录", text))
         if re.search(r"状态|status", text):
             add_step("git_status", {}, dry_run=True)
-        if re.search(r"日志|log|历史", text):
+        if wants_log:
             add_step("git_log", {"n": 10}, dry_run=True)
         if re.search(r"差异|diff", text):
             add_step("git_diff", {"staged": False}, dry_run=True)
@@ -61,7 +63,9 @@ class RulePlanner:
         if re.search(r"初始化仓库|创建仓库|建立仓库|初始化\\s*git|git\\s*repo|git\\s*init", text, re.IGNORECASE):
             add_step("git_init", {}, dry_run=True)
 
-        if re.search(r"提交|commit", text):
+        commit_trigger = bool(re.search(r"(提交(代码|改动|修复|到仓库)?|commit)", text))
+        commit_intent = commit_trigger and not wants_log and not re.search(r"提交历史|提交日志|提交记录|历史提交|最近提交", text)
+        if commit_intent:
             msg_match = re.search(r"提交[:：]\s*(.+)", text)
             if not msg_match:
                 questions.append("提交信息是什么？例如：提交: 修复登录按钮")
@@ -108,7 +112,7 @@ class RulePlanner:
                 add_step("organize_suggestions", {}, dry_run=True)
 
         if not steps and not questions:
-            questions.append("请说明想执行的 Git 或文件操作，以及是否需要 Dry-run。")
+            questions.append("请说明想执行的 Git 或文件操作，以及是否需要试运行。")
 
         return Plan(
             intent=intent,
@@ -126,9 +130,16 @@ class Planner:
         self.workspace = workspace
         self.rule_planner = RulePlanner()
         self._config = load_config(workspace)
+        self._model_override: Optional[str] = None
+
+    def set_model(self, model: Optional[str]) -> None:
+        self._model_override = model
 
     def _get_llm_client(self) -> LLMClient:
-        return LLMClient(self._config)
+        cfg = self._config
+        if self._model_override:
+            cfg = replace(self._config, model=self._model_override)
+        return LLMClient(cfg)
 
     def plan(self, user_input: str, use_llm: bool = True) -> PlanResult:
         if not use_llm:
@@ -142,12 +153,18 @@ class Planner:
             client = self._get_llm_client()
             text = client.chat_text(messages, temperature=0.2, max_tokens=2048)
         except LLMKeyMissing as exc:
-            return PlanResult(errors=[str(exc)], plan=self.rule_planner.plan(user_input))
+            plan = self.rule_planner.plan(user_input)
+            if plan.steps and all(s.safety_level == "low" for s in plan.steps):
+                plan.questions = []
+            return PlanResult(errors=[str(exc)], plan=plan)
         except Exception as exc:
             msg = str(exc)
             name = exc.__class__.__name__
             if name in {"APITimeoutError", "TimeoutError"} or "timed out" in msg or "timeout" in msg or "超时" in msg:
-                return PlanResult(errors=[f"LLM 调用超时：{exc}"], plan=self.rule_planner.plan(user_input))
+                plan = self.rule_planner.plan(user_input)
+                if plan.steps and all(s.safety_level == "low" for s in plan.steps):
+                    plan.questions = []
+                return PlanResult(errors=[f"LLM 调用超时：{exc}"], plan=plan)
             return PlanResult(errors=[f"LLM 调用失败：{exc}"], plan=None)
 
         try:

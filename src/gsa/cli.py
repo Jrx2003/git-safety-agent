@@ -34,7 +34,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         print("未生成计划")
         return
     if plan_result.plan.needs_confirmation and not args.yes:
-        print("计划需要 YES 确认，已执行 Dry-run。")
+        print("计划需要 YES 确认，已执行试运行。")
     result = orch.execute(plan_result.plan, plan_result.trace_id, confirmed=args.yes)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

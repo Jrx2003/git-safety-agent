@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, Iterable, List, Optional
 
 import httpx
@@ -17,7 +17,7 @@ class LLMConfig:
     model: str = GLM_MODEL
     max_tokens: int = 65536
     temperature: float = 1.0
-    thinking_enabled: bool = True
+    thinking_enabled: bool = False
     base_url: str = "https://api.z.ai/api/paas/v4/"
     timeout: float = 300.0
     connect_timeout: float = 8.0
@@ -34,6 +34,7 @@ def load_config(workspace: Optional[str] = None) -> LLMConfig:
     """从环境变量与 config.yaml 读取配置。"""
     api_key = os.environ.get("BIGMODEL_API_KEY", "") or os.environ.get("ZAI_API_KEY", "")
     env_base_url = os.environ.get("ZAI_BASE_URL", "") or os.environ.get("BIGMODEL_BASE_URL", "")
+    env_model = os.environ.get("GLM_MODEL", "") or os.environ.get("GSA_MODEL", "")
     config_paths = []
     if workspace:
         config_paths.append(os.path.join(workspace, "config.yaml"))
@@ -43,6 +44,8 @@ def load_config(workspace: Optional[str] = None) -> LLMConfig:
     cfg = LLMConfig()
     if env_base_url:
         cfg.base_url = env_base_url
+    if env_model:
+        cfg.model = env_model
 
     for path in config_paths:
         if not path or not os.path.exists(path):
@@ -59,6 +62,8 @@ def load_config(workspace: Optional[str] = None) -> LLMConfig:
                     cfg.temperature = float(data.get("GLM_TEMPERATURE"))
                 if data.get("GLM_THINKING_ENABLED") is not None:
                     cfg.thinking_enabled = bool(data.get("GLM_THINKING_ENABLED"))
+                if data.get("GLM_MODEL"):
+                    cfg.model = str(data.get("GLM_MODEL"))
                 if data.get("GLM_BASE_URL"):
                     cfg.base_url = str(data.get("GLM_BASE_URL"))
                 if data.get("GLM_TIMEOUT"):

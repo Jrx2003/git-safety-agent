@@ -162,6 +162,20 @@ class IndexTool:
         suggestions = self._llm_or_rule_suggestions(snippets)
         return {"ok": True, "suggestions": suggestions}
 
+    def qa(self, query: str, top_k: int = 6, dry_run: bool = True) -> Dict[str, object]:
+        vs = self._load_vectorstore()
+        if not vs:
+            return {"ok": False, "error": "索引不存在"}
+        docs = vs.similarity_search(query, k=top_k)
+        context = "\n".join([f"[{i+1}] {d.page_content[:400]}" for i, d in enumerate(docs)])
+        answer = self._llm_or_rule_qa(query, context)
+        sources = []
+        for d in docs:
+            src = d.metadata.get("source") or ""
+            if src and src not in sources:
+                sources.append(src)
+        return {"ok": True, "answer": answer, "sources": sources}
+
     def _llm_or_rule_summary(self, context: str) -> str:
         client = LLMClient(load_config(self.workspace))
         prompt = (
@@ -195,3 +209,25 @@ class IndexTool:
             return "未配置 API Key，规则建议：按模块归档、清理重复文件、补齐 README 与文档目录。"
         except Exception:
             return "建议生成失败，请检查索引与配置。"
+
+    def _llm_or_rule_qa(self, query: str, context: str) -> str:
+        client = LLMClient(load_config(self.workspace))
+        prompt = (
+            "你是仓库问答助手。仅基于给定片段回答，不要编造。\n"
+            "如果回答包含代码，请使用 Markdown 代码块并保留换行与缩进。\n"
+            f"问题：{query}\n"
+            "片段：\n"
+            f"{context}\n"
+            "若片段不足以回答，请明确说明无法回答。"
+        )
+        try:
+            return client.chat_text(
+                [
+                    {"role": "system", "content": "你是仓库问答助手"},
+                    {"role": "user", "content": prompt},
+                ]
+            )
+        except LLMKeyMissing:
+            return "未配置 API Key，无法生成回答。"
+        except Exception:
+            return "问答失败，请检查索引与配置。"

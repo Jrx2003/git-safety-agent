@@ -14,7 +14,7 @@ class Step(BaseModel):
     args: Dict[str, object] = Field(default_factory=dict, description="结构化参数")
     safety_level: SafetyLevel = Field(..., description="风险等级")
     safety_reason: str = Field(..., description="风险原因")
-    dry_run: bool = Field(default=True, description="是否为 Dry-run")
+    dry_run: bool = Field(default=True, description="是否为试运行")
 
 
 class Plan(BaseModel):

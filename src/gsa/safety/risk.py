@@ -19,6 +19,7 @@ RISK_MAP = {
     "index_search": ("low", "只读操作"),
     "repo_summarize": ("low", "只读操作"),
     "organize_suggestions": ("low", "只读操作"),
+    "index_qa": ("low", "只读操作"),
     "git_init": ("medium", "初始化仓库会创建 .git 目录"),
     "git_add": ("medium", "会修改暂存区"),
     "git_commit": ("medium", "会创建提交"),

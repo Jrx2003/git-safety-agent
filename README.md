@@ -30,7 +30,7 @@
 
 ## 关键特性
 
-- **可控**：禁止危险 git 操作（reset --hard/clean -fd/force push），写操作必须 YES 二次确认 + Dry-run 预览。
+- **可控**：禁止危险 git 操作（reset --hard/clean -fd/force push），写操作必须 YES 二次确认 + 试运行预览。
 - **可观测**：每次运行生成 trace_id + JSONL 事件日志 + changes.md 摘要。
 - **可评测**：提供 eval/test_cases.yaml 与 runner，可在无 key 下运行规则规划器。
 - **MCP 支持**：实现 MCP Server/Client（stdio JSON-RPC 兼容层），工具统一注册与调用。
@@ -41,7 +41,7 @@
 - **黑名单**：reset --hard / clean -fd / push --force 一律拒绝。
 - **Sandbox**：文件操作仅限 workspace，realpath 校验阻止路径逃逸。
 - **二次确认**：medium/high 风险步骤必须 YES。
-- **Dry-run**：写操作默认 dry-run，展示 diff 或影响范围。
+- **试运行**：写操作默认试运行，展示 diff 或影响范围。
 - **歧义追问**：信息不足时返回 questions，不允许猜测执行。
 - **变更上限**：单次写步骤 >10 直接拒绝。
 
@@ -56,6 +56,8 @@
 - Git 历史：最近提交列表
 - 日志：trace_id 与最近日志内容
 - 默认使用 LLM，如未配置 API Key 将自动降级为规则规划
+- 对话模式：计划执行 / 索引问答 / 仓库概览 / 整理建议
+- 整理建议可一键转成可执行计划
 
 ## LangChain 索引/搜索/摘要
 
@@ -96,6 +98,7 @@ pip install zai-sdk
 高级配置（可选，写在 config.yaml 或环境变量）：
 ```
 GLM_BASE_URL: "https://api.z.ai/api/paas/v4/"
+GLM_MODEL: "glm-4.7"          # 可改为 glm-4.7-flash
 GLM_TIMEOUT: 300
 GLM_CONNECT_TIMEOUT: 8
 GLM_MAX_RETRIES: 2
@@ -147,7 +150,7 @@ python -m gsa.eval.runner
 
 1) 未配置 API Key：自动降级为规则规划/摘要。
 2) 规划结果无效 JSON：解析失败后回退规则规划器。
-3) 写操作未确认：仅 dry-run，不会修改。
+3) 写操作未确认：仅试运行，不会修改。
 4) 路径越界：realpath 校验直接拒绝。
 5) 索引不存在：提示先构建索引。
 
