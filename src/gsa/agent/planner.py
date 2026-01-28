@@ -131,14 +131,20 @@ class Planner:
         self.rule_planner = RulePlanner()
         self._config = load_config(workspace)
         self._model_override: Optional[str] = None
+        self._base_url_override: Optional[str] = None
 
     def set_model(self, model: Optional[str]) -> None:
         self._model_override = model
+
+    def set_base_url(self, base_url: Optional[str]) -> None:
+        self._base_url_override = base_url
 
     def _get_llm_client(self) -> LLMClient:
         cfg = self._config
         if self._model_override:
             cfg = replace(self._config, model=self._model_override)
+        if self._base_url_override:
+            cfg = replace(cfg, base_url=self._base_url_override)
         return LLMClient(cfg)
 
     def plan(self, user_input: str, use_llm: bool = True) -> PlanResult:

@@ -243,6 +243,46 @@ def _handle_chat_request(orch: Orchestrator, user_input: str, chat_mode: str) ->
                     append_message("assistant", msg2)
 
 
+def _handle_quick_action(orch: Orchestrator, action: str) -> None:
+    with st.chat_message("assistant"):
+        with st.spinner("正在规划..."):
+            if action == "repo_summarize":
+                res = orch.mcp.call_tool("repo_summarize", {})
+                if not res.get("ok", True) and "索引不存在" in str(res.get("error")):
+                    msg = (
+                        "索引尚未构建。索引会把本地文件切片并建立向量检索，"
+                        "使模型能基于源码准确回答问题。"
+                    )
+                    st.session_state["need_index"] = True
+                    st.session_state["need_index_msg"] = msg
+                else:
+                    msg = res.get("summary", "") if res.get("ok", True) else res.get("error", "概览失败")
+                st.write(msg)
+                append_message("assistant", msg)
+                return
+            if action == "organize_suggestions":
+                res = orch.mcp.call_tool("organize_suggestions", {})
+                if not res.get("ok", True) and "索引不存在" in str(res.get("error")):
+                    msg = (
+                        "索引尚未构建。索引会把本地文件切片并建立向量检索，"
+                        "使模型能基于源码准确回答问题。"
+                    )
+                    st.session_state["need_index"] = True
+                    st.session_state["need_index_msg"] = msg
+                else:
+                    if not res.get("ok", True):
+                        msg = res.get("error", "整理建议失败")
+                    else:
+                        msg = res.get("suggestions", "")
+                        st.session_state["last_suggestions"] = msg
+                st.write(msg)
+                append_message("assistant", msg)
+                return
+            msg = "未知操作"
+            st.write(msg)
+            append_message("assistant", msg)
+
+
 def main():
     st.title("Git Safety Agent")
 
@@ -267,7 +307,18 @@ def main():
 
         st.caption(_llm_status_text(workspace))
         cfg = load_config(workspace)
-        st.caption(f"Base URL: {cfg.base_url}")
+        base_options = {
+            "国内（open.bigmodel.cn）": "https://open.bigmodel.cn/api/paas/v4/",
+            "海外（api.z.ai）": "https://api.z.ai/api/paas/v4/",
+        }
+        current_url = st.session_state.get("base_url_override") or cfg.base_url
+        base_index = 0 if "open.bigmodel.cn" in current_url else 1
+        base_label = st.selectbox("接口地址", list(base_options.keys()), index=base_index)
+        selected_url = base_options[base_label]
+        st.session_state["base_url_override"] = selected_url
+        os.environ["BIGMODEL_BASE_URL"] = selected_url
+        orch.planner.set_base_url(selected_url)
+        st.caption(f"Base URL: {selected_url}")
         model = st.selectbox(
             "模型选择",
             ["glm-4.7", "glm-4.7-flash"],
@@ -285,200 +336,185 @@ def main():
         st.session_state["chat_mode"] = chat_mode
         if st.button("一键仓库概览"):
             append_message("user", "一键仓库概览")
-            res = orch.mcp.call_tool("repo_summarize", {})
-            if not res.get("ok", True) and "索引不存在" in str(res.get("error")):
-                msg = (
-                    "索引尚未构建。索引会把本地文件切片并建立向量检索，"
-                    "使模型能基于源码准确回答问题。"
-                )
-                st.session_state["need_index"] = True
-                st.session_state["need_index_msg"] = msg
-                append_message("assistant", msg)
-            else:
-                msg = res.get("summary", "") if res.get("ok", True) else res.get("error", "概览失败")
-                append_message("assistant", msg)
+            st.session_state["pending_quick_action"] = {"id": uuid.uuid4().hex, "action": "repo_summarize"}
+            st.session_state["pending_quick_action_handled"] = False
+            st.rerun()
         if st.button("一键整理建议"):
             append_message("user", "一键整理建议")
-            res = orch.mcp.call_tool("organize_suggestions", {})
-            if not res.get("ok", True) and "索引不存在" in str(res.get("error")):
-                msg = (
-                    "索引尚未构建。索引会把本地文件切片并建立向量检索，"
-                    "使模型能基于源码准确回答问题。"
-                )
-                st.session_state["need_index"] = True
-                st.session_state["need_index_msg"] = msg
-                append_message("assistant", msg)
-            else:
-                if not res.get("ok", True):
-                    msg = res.get("error", "整理建议失败")
-                else:
-                    msg = res.get("suggestions", "")
-                    st.session_state["last_suggestions"] = msg
-                append_message("assistant", msg)
+            st.session_state["pending_quick_action"] = {"id": uuid.uuid4().hex, "action": "organize_suggestions"}
+            st.session_state["pending_quick_action_handled"] = False
+            st.rerun()
 
         if orch.memory.persist.common_workspaces:
             st.caption("常用工作区")
             st.code("\n".join(orch.memory.persist.common_workspaces[-5:]))
 
         st.divider()
-        st.header("目录结构")
-        depth = st.slider("展开深度", 1, 6, 3)
-        query = st.text_input("快速搜索路径")
-        preview_enabled = st.checkbox("启用文件预览", value=True)
-        st.session_state["preview_enabled"] = preview_enabled
-        if st.button("刷新目录"):
-            st.cache_data.clear()
-        items = get_tree_items(workspace, depth)
-        if query:
-            items = [i for i in items if query in i]
-        tree = build_tree(items)
-        render_tree(tree)
+        with st.expander("目录结构", expanded=False):
+            query = st.text_input("快速搜索路径")
+            preview_enabled = st.checkbox("启用文件预览", value=True)
+            st.session_state["preview_enabled"] = preview_enabled
+            if st.button("刷新目录"):
+                st.cache_data.clear()
+            items = get_tree_items(workspace, 3)
+            if query:
+                items = [i for i in items if query in i]
+            tree = build_tree(items)
+            render_tree(tree)
 
         st.divider()
-        st.header("Git 历史（图形）")
-        n = st.slider("提交数量", 5, 80, 30)
-        branch = st.text_input("分支过滤（可选）", value="")
-        author = st.text_input("作者过滤（可选）", value="")
-        path = st.text_input("文件路径过滤（可选）", value="")
-        if st.button("刷新历史"):
-            st.cache_data.clear()
-        graph = get_git_graph(workspace, n, author, branch, path)
-        st.code(graph, language="text")
+        with st.expander("Git 历史", expanded=False):
+            n = st.slider("提交数量", 5, 80, 30)
+            branch = st.text_input("分支过滤（可选）", value="")
+            author = st.text_input("作者过滤（可选）", value="")
+            path = st.text_input("文件路径过滤（可选）", value="")
+            if st.button("刷新历史"):
+                st.cache_data.clear()
+            graph = get_git_graph(workspace, n, author, branch, path)
+            st.code(graph, language="text")
 
-    messages = st.session_state.get("messages", [])
-    if messages:
-        st.subheader("对话区")
-        render_messages()
-    else:
-        st.markdown(
-            """
-            <div style="text-align:center;padding:2rem 0;">
-              <h3>欢迎使用 Git Safety Agent</h3>
-              <p>输入自然语言指令，我会先规划再执行，确保操作可控可回溯。</p>
-              <p>你可以尝试：</p>
-              <p>• 初始化 Git 仓库 • 查看最近提交历史 • 一键仓库概览 • 一键整理建议</p>
-              <p>切换到“索引问答”模式，还可以就源码提问。</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    with st.container():
+        messages = st.session_state.get("messages", [])
+        if messages:
+            st.subheader("对话区")
+            render_messages()
+        else:
+            st.markdown(
+                """
+                <div style="text-align:center;padding:2rem 0;">
+                  <h3>欢迎使用 Git Safety Agent</h3>
+                  <p>输入自然语言指令，我会先规划再执行，确保操作可控可回溯。</p>
+                  <p>你可以尝试：</p>
+                  <p>• 初始化 Git 仓库 • 查看最近提交历史 • 一键仓库概览 • 一键整理建议</p>
+                  <p>切换到“索引问答”模式，还可以就源码提问。</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-    user_input = st.chat_input("输入自然语言任务...")
-    if user_input:
-        chat_mode = st.session_state.get("chat_mode", "计划执行")
-        prefix = "计划执行" if chat_mode == "计划执行" else "索引问答"
-        append_message("user", f"{prefix}：{user_input}")
-        st.session_state["pending_request"] = {
-            "id": uuid.uuid4().hex,
-            "input": user_input,
-            "mode": chat_mode,
-        }
-        st.session_state["pending_request_handled"] = False
-        st.rerun()
+        user_input = st.chat_input("输入自然语言任务...")
+        if user_input:
+            chat_mode = st.session_state.get("chat_mode", "计划执行")
+            prefix = "计划执行" if chat_mode == "计划执行" else "索引问答"
+            append_message("user", f"{prefix}：{user_input}")
+            st.session_state["pending_request"] = {
+                "id": uuid.uuid4().hex,
+                "input": user_input,
+                "mode": chat_mode,
+            }
+            st.session_state["pending_request_handled"] = False
+            st.rerun()
 
-    if st.session_state.get("pending_request") and not st.session_state.get("pending_request_handled"):
-        req = st.session_state.get("pending_request", {})
-        try:
-            _handle_chat_request(orch, req.get("input", ""), req.get("mode", "计划执行"))
-        finally:
-            st.session_state["pending_request_handled"] = True
+        if st.session_state.get("pending_request") and not st.session_state.get("pending_request_handled"):
+            req = st.session_state.get("pending_request", {})
+            try:
+                _handle_chat_request(orch, req.get("input", ""), req.get("mode", "计划执行"))
+            finally:
+                st.session_state["pending_request_handled"] = True
 
-    suggestions = st.session_state.get("last_suggestions")
-    if suggestions:
-        if st.button("根据最近整理建议生成执行计划"):
-            with st.chat_message("user"):
-                st.write("请根据最近整理建议生成可执行计划")
-            append_message("user", "请根据最近整理建议生成可执行计划")
-            prompt = "以下是整理建议，请生成可执行的计划步骤：\n" + suggestions
-            with st.chat_message("assistant"):
-                with st.spinner("正在规划..."):
-                    orch.use_llm = True
-                    result = orch.plan(prompt)
-                    st.session_state["last_plan_result"] = result
-                    msg = _friendly_error(result.errors, has_plan=bool(result.plan))
-                    if msg:
-                        st.write(msg)
-                        append_message("assistant", msg)
-                    if result.plan:
-                        if result.plan.questions:
-                            qs = clarify_questions(result.plan.questions)
-                            msg2 = "我需要进一步澄清：\n" + qs
-                            st.write(msg2)
-                            append_message("assistant", msg2)
-                            st.session_state["pending_questions"] = result.plan.questions
-                        else:
-                            msg2 = _plan_summary_text(result.plan)
-                            st.write(msg2)
-                            append_message("assistant", msg2)
+        if st.session_state.get("pending_quick_action") and not st.session_state.get("pending_quick_action_handled"):
+            qa = st.session_state.get("pending_quick_action", {})
+            try:
+                _handle_quick_action(orch, qa.get("action", ""))
+            finally:
+                st.session_state["pending_quick_action_handled"] = True
 
-    plan_result = st.session_state.get("last_plan_result")
-    if plan_result and plan_result.plan:
-        with st.expander("查看计划 JSON", expanded=False):
-            st.json(plan_result.plan.model_dump())
+        suggestions = st.session_state.get("last_suggestions")
+        if suggestions:
+            if st.button("根据最近整理建议生成执行计划"):
+                with st.chat_message("user"):
+                    st.write("请根据最近整理建议生成可执行计划")
+                append_message("user", "请根据最近整理建议生成可执行计划")
+                prompt = "以下是整理建议，请生成可执行的计划步骤：\n" + suggestions
+                with st.chat_message("assistant"):
+                    with st.spinner("正在规划..."):
+                        orch.use_llm = True
+                        result = orch.plan(prompt)
+                        st.session_state["last_plan_result"] = result
+                        msg = _friendly_error(result.errors, has_plan=bool(result.plan))
+                        if msg:
+                            st.write(msg)
+                            append_message("assistant", msg)
+                        if result.plan:
+                            if result.plan.questions:
+                                qs = clarify_questions(result.plan.questions)
+                                msg2 = "我需要进一步澄清：\n" + qs
+                                st.write(msg2)
+                                append_message("assistant", msg2)
+                                st.session_state["pending_questions"] = result.plan.questions
+                            else:
+                                msg2 = _plan_summary_text(result.plan)
+                                st.write(msg2)
+                                append_message("assistant", msg2)
 
-        st.subheader("执行控制")
-        confirmed = st.checkbox("我已阅读风险并确认执行（YES）", value=False)
-        col_run, col_dry = st.columns(2)
-        with col_run:
-            if st.button("执行计划"):
-                with st.spinner("执行中..."):
-                    exec_res = orch.execute(plan_result.plan, plan_result.trace_id, confirmed=confirmed)
-                    st.session_state["exec_result"] = exec_res
-        with col_dry:
-            if st.button("仅试运行"):
-                with st.spinner("试运行中..."):
-                    exec_res = orch.execute(plan_result.plan, plan_result.trace_id, confirmed=False)
-                    st.session_state["exec_result"] = exec_res
+        plan_result = st.session_state.get("last_plan_result")
+        if plan_result and plan_result.plan:
+            with st.expander("查看计划 JSON", expanded=False):
+                st.json(plan_result.plan.model_dump())
 
-    exec_result = st.session_state.get("exec_result")
-    if exec_result:
-        st.subheader("执行结果")
-        st.json(exec_result)
-        st.subheader("标准输出/错误摘要")
-        for item in exec_result.get("results", []):
-            tool = item.get("tool", "")
-            result = item.get("result", {}) if item.get("ok") else {}
-            stdout = result.get("stdout")
-            stderr = result.get("stderr")
-            if stdout or stderr:
-                st.markdown(f"**{tool}**")
-                if stdout:
-                    st.code(stdout, language="text")
-                if stderr:
-                    st.code(stderr, language="text")
-        st.info(f"trace_id: {exec_result.get('trace_id')}")
-        log_path = os.path.join(orch.workspace, ".gsa", "logs")
-        st.info(f"日志目录：{log_path}")
-        try:
-            files = sorted(os.listdir(log_path))
-            if files:
-                latest = os.path.join(log_path, files[-1])
-                with open(latest, "r", encoding="utf-8") as f:
-                    lines = f.read().splitlines()[-50:]
-                st.code("\n".join(lines), language="json")
-        except Exception:
-            pass
+            st.subheader("执行控制")
+            confirmed = st.checkbox("我已阅读风险并确认执行（YES）", value=False)
+            col_run, col_dry = st.columns(2)
+            with col_run:
+                if st.button("执行计划"):
+                    with st.spinner("执行中..."):
+                        exec_res = orch.execute(plan_result.plan, plan_result.trace_id, confirmed=confirmed)
+                        st.session_state["exec_result"] = exec_res
+            with col_dry:
+                if st.button("仅试运行"):
+                    with st.spinner("试运行中..."):
+                        exec_res = orch.execute(plan_result.plan, plan_result.trace_id, confirmed=False)
+                        st.session_state["exec_result"] = exec_res
 
-    if st.session_state.get("need_index"):
-        st.subheader("索引提示")
-        st.info(st.session_state.get("need_index_msg", "需要先构建索引。"))
-        if st.button("构建索引"):
-            with st.spinner("正在构建索引..."):
-                res = orch.mcp.call_tool(
-                    "index_build",
-                    {"include_globs": ["**/*"], "exclude_globs": [], "dry_run": False},
-                )
-            if res.get("ok", True):
-                msg = (
-                    f"索引已构建：文档 {res.get('docs')}，"
-                    f"切片 {res.get('chunks')}。请重新提问。"
-                )
-                st.session_state["need_index"] = False
-                st.session_state["need_index_msg"] = ""
-            else:
-                msg = res.get("error", "索引构建失败")
-            st.write(msg)
-            append_message("assistant", msg)
+        exec_result = st.session_state.get("exec_result")
+        if exec_result:
+            st.subheader("执行结果")
+            st.json(exec_result)
+            st.subheader("标准输出/错误摘要")
+            for item in exec_result.get("results", []):
+                tool = item.get("tool", "")
+                result = item.get("result", {}) if item.get("ok") else {}
+                stdout = result.get("stdout")
+                stderr = result.get("stderr")
+                if stdout or stderr:
+                    st.markdown(f"**{tool}**")
+                    if stdout:
+                        st.code(stdout, language="text")
+                    if stderr:
+                        st.code(stderr, language="text")
+            st.info(f"trace_id: {exec_result.get('trace_id')}")
+            log_path = os.path.join(orch.workspace, ".gsa", "logs")
+            st.info(f"日志目录：{log_path}")
+            try:
+                files = sorted(os.listdir(log_path))
+                if files:
+                    latest = os.path.join(log_path, files[-1])
+                    with open(latest, "r", encoding="utf-8") as f:
+                        lines = f.read().splitlines()[-50:]
+                    st.code("\n".join(lines), language="json")
+            except Exception:
+                pass
+
+        if st.session_state.get("need_index"):
+            st.subheader("索引提示")
+            st.info(st.session_state.get("need_index_msg", "需要先构建索引。"))
+            if st.button("构建索引"):
+                with st.spinner("正在构建索引..."):
+                    res = orch.mcp.call_tool(
+                        "index_build",
+                        {"include_globs": ["**/*"], "exclude_globs": [], "dry_run": False},
+                    )
+                if res.get("ok", True):
+                    msg = (
+                        f"索引已构建：文档 {res.get('docs')}，"
+                        f"切片 {res.get('chunks')}。请重新提问。"
+                    )
+                    st.session_state["need_index"] = False
+                    st.session_state["need_index_msg"] = ""
+                else:
+                    msg = res.get("error", "索引构建失败")
+                st.write(msg)
+                append_message("assistant", msg)
 
     preview_enabled = st.session_state.get("preview_enabled", True)
     preview_path = st.session_state.get("preview_file", "")
