@@ -79,7 +79,11 @@ def render_tree(node: Dict[str, Any], base: str = "") -> None:
     for f in files:
         full_path = os.path.join(base, f) if base else f
         if st.button(f"📄 {f}", key=f"file_{full_path}"):
-            st.session_state["preview_file"] = full_path
+            if st.session_state.get("processing"):
+                st.session_state["queued_preview_file"] = full_path
+                st.session_state["preview_notice"] = "正在生成中，预览将在完成后显示。"
+            else:
+                st.session_state["preview_file"] = full_path
 
 
 def append_message(role: str, content: str) -> None:
@@ -170,109 +174,109 @@ def _handle_chat_request(orch: Orchestrator, user_input: str, chat_mode: str) ->
     base_input = st.session_state.get("pending_base_input", "")
 
     with st.chat_message("assistant"):
-        with st.spinner("正在规划..."):
-            if chat_mode == "索引问答":
-                res = orch.mcp.call_tool("index_qa", {"query": user_input, "top_k": 6})
-                if not res.get("ok", True):
-                    if "索引不存在" in str(res.get("error")):
-                        msg = (
-                            "索引尚未构建。索引会把本地文件切片并建立向量检索，"
-                            "使模型能基于源码准确回答问题。"
-                        )
-                        st.session_state["need_index"] = True
-                        st.session_state["need_index_msg"] = msg
-                    else:
-                        msg = res.get("error", "索引问答失败")
-                    st.write(msg)
-                    append_message("assistant", msg)
+        st.write("正在规划...")
+        if chat_mode == "索引问答":
+            res = orch.mcp.call_tool("index_qa", {"query": user_input, "top_k": 6})
+            if not res.get("ok", True):
+                if "索引不存在" in str(res.get("error")):
+                    msg = (
+                        "索引尚未构建。索引会把本地文件切片并建立向量检索，"
+                        "使模型能基于源码准确回答问题。"
+                    )
+                    st.session_state["need_index"] = True
+                    st.session_state["need_index_msg"] = msg
                 else:
-                    answer = res.get("answer", "")
-                    sources = res.get("sources", [])
-                    snippets = res.get("snippets", [])
-                    _render_qa_answer(answer, sources, user_input)
-                    if snippets:
-                        with st.expander("相关片段", expanded=False):
-                            for snip in snippets:
-                                src = snip.get("source") or "未知来源"
-                                text = snip.get("content", "")
-                                st.markdown(f"**{src}**")
-                                if _is_code_like(text, user_input):
-                                    st.code(text, language="text")
-                                else:
-                                    st.write(text)
-                    msg = answer
-                    if sources:
-                        msg += "\n\n参考文件：\n" + "\n".join([f"- {s}" for s in sources])
-                    append_message("assistant", msg)
-                return
-
-            if pending_questions:
-                combined = base_input + "\n补充信息: " + user_input
-                st.session_state["pending_questions"] = []
-            else:
-                combined = user_input
-                st.session_state["pending_base_input"] = user_input
-
-            orch.use_llm = True
-            result = orch.plan(combined)
-            st.session_state["last_plan_result"] = result
-
-            msg = _friendly_error(result.errors, has_plan=bool(result.plan))
-            if msg:
+                    msg = res.get("error", "索引问答失败")
                 st.write(msg)
                 append_message("assistant", msg)
+            else:
+                answer = res.get("answer", "")
+                sources = res.get("sources", [])
+                snippets = res.get("snippets", [])
+                _render_qa_answer(answer, sources, user_input)
+                if snippets:
+                    with st.expander("相关片段", expanded=False):
+                        for snip in snippets:
+                            src = snip.get("source") or "未知来源"
+                            text = snip.get("content", "")
+                            st.markdown(f"**{src}**")
+                            if _is_code_like(text, user_input):
+                                st.code(text, language="text")
+                            else:
+                                st.write(text)
+                msg = answer
+                if sources:
+                    msg += "\n\n参考文件：\n" + "\n".join([f"- {s}" for s in sources])
+                append_message("assistant", msg)
+            return
 
-            if result.plan:
-                if result.plan.questions:
-                    qs = clarify_questions(result.plan.questions)
-                    msg2 = "我需要进一步澄清：\n" + qs
-                    st.write(msg2)
-                    append_message("assistant", msg2)
-                    st.session_state["pending_questions"] = result.plan.questions
-                else:
-                    msg2 = _plan_summary_text(result.plan)
-                    st.write(msg2)
-                    append_message("assistant", msg2)
+        if pending_questions:
+            combined = base_input + "\n补充信息: " + user_input
+            st.session_state["pending_questions"] = []
+        else:
+            combined = user_input
+            st.session_state["pending_base_input"] = user_input
+
+        orch.use_llm = True
+        result = orch.plan(combined)
+        st.session_state["last_plan_result"] = result
+
+        msg = _friendly_error(result.errors, has_plan=bool(result.plan))
+        if msg:
+            st.write(msg)
+            append_message("assistant", msg)
+
+        if result.plan:
+            if result.plan.questions:
+                qs = clarify_questions(result.plan.questions)
+                msg2 = "我需要进一步澄清：\n" + qs
+                st.write(msg2)
+                append_message("assistant", msg2)
+                st.session_state["pending_questions"] = result.plan.questions
+            else:
+                msg2 = _plan_summary_text(result.plan)
+                st.write(msg2)
+                append_message("assistant", msg2)
 
 
 def _handle_quick_action(orch: Orchestrator, action: str) -> None:
     with st.chat_message("assistant"):
-        with st.spinner("正在规划..."):
-            if action == "repo_summarize":
-                res = orch.mcp.call_tool("repo_summarize", {})
-                if not res.get("ok", True) and "索引不存在" in str(res.get("error")):
-                    msg = (
-                        "索引尚未构建。索引会把本地文件切片并建立向量检索，"
-                        "使模型能基于源码准确回答问题。"
-                    )
-                    st.session_state["need_index"] = True
-                    st.session_state["need_index_msg"] = msg
-                else:
-                    msg = res.get("summary", "") if res.get("ok", True) else res.get("error", "概览失败")
-                st.write(msg)
-                append_message("assistant", msg)
-                return
-            if action == "organize_suggestions":
-                res = orch.mcp.call_tool("organize_suggestions", {})
-                if not res.get("ok", True) and "索引不存在" in str(res.get("error")):
-                    msg = (
-                        "索引尚未构建。索引会把本地文件切片并建立向量检索，"
-                        "使模型能基于源码准确回答问题。"
-                    )
-                    st.session_state["need_index"] = True
-                    st.session_state["need_index_msg"] = msg
-                else:
-                    if not res.get("ok", True):
-                        msg = res.get("error", "整理建议失败")
-                    else:
-                        msg = res.get("suggestions", "")
-                        st.session_state["last_suggestions"] = msg
-                st.write(msg)
-                append_message("assistant", msg)
-                return
-            msg = "未知操作"
+        st.write("正在规划...")
+        if action == "repo_summarize":
+            res = orch.mcp.call_tool("repo_summarize", {})
+            if not res.get("ok", True) and "索引不存在" in str(res.get("error")):
+                msg = (
+                    "索引尚未构建。索引会把本地文件切片并建立向量检索，"
+                    "使模型能基于源码准确回答问题。"
+                )
+                st.session_state["need_index"] = True
+                st.session_state["need_index_msg"] = msg
+            else:
+                msg = res.get("summary", "") if res.get("ok", True) else res.get("error", "概览失败")
             st.write(msg)
             append_message("assistant", msg)
+            return
+        if action == "organize_suggestions":
+            res = orch.mcp.call_tool("organize_suggestions", {})
+            if not res.get("ok", True) and "索引不存在" in str(res.get("error")):
+                msg = (
+                    "索引尚未构建。索引会把本地文件切片并建立向量检索，"
+                    "使模型能基于源码准确回答问题。"
+                )
+                st.session_state["need_index"] = True
+                st.session_state["need_index_msg"] = msg
+            else:
+                if not res.get("ok", True):
+                    msg = res.get("error", "整理建议失败")
+                else:
+                    msg = res.get("suggestions", "")
+                    st.session_state["last_suggestions"] = msg
+            st.write(msg)
+            append_message("assistant", msg)
+            return
+        msg = "未知操作"
+        st.write(msg)
+        append_message("assistant", msg)
 
 
 def main():
@@ -281,6 +285,7 @@ def main():
         """
         <style>
         section[data-testid="stSidebar"] { width: 360px !important; }
+        section[data-testid="stSidebar"] button[title="Collapse sidebar"] { display: inline-flex !important; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -441,25 +446,25 @@ def main():
                 append_message("user", "请根据最近整理建议生成可执行计划")
                 prompt = "以下是整理建议，请生成可执行的计划步骤：\n" + suggestions
                 with st.chat_message("assistant"):
-                    with st.spinner("正在规划..."):
-                        orch.use_llm = True
-                        result = orch.plan(prompt)
-                        st.session_state["last_plan_result"] = result
-                        msg = _friendly_error(result.errors, has_plan=bool(result.plan))
-                        if msg:
-                            st.write(msg)
-                            append_message("assistant", msg)
-                        if result.plan:
-                            if result.plan.questions:
-                                qs = clarify_questions(result.plan.questions)
-                                msg2 = "我需要进一步澄清：\n" + qs
-                                st.write(msg2)
-                                append_message("assistant", msg2)
-                                st.session_state["pending_questions"] = result.plan.questions
-                            else:
-                                msg2 = _plan_summary_text(result.plan)
-                                st.write(msg2)
-                                append_message("assistant", msg2)
+                    st.write("正在规划...")
+                    orch.use_llm = True
+                    result = orch.plan(prompt)
+                    st.session_state["last_plan_result"] = result
+                    msg = _friendly_error(result.errors, has_plan=bool(result.plan))
+                    if msg:
+                        st.write(msg)
+                        append_message("assistant", msg)
+                    if result.plan:
+                        if result.plan.questions:
+                            qs = clarify_questions(result.plan.questions)
+                            msg2 = "我需要进一步澄清：\n" + qs
+                            st.write(msg2)
+                            append_message("assistant", msg2)
+                            st.session_state["pending_questions"] = result.plan.questions
+                        else:
+                            msg2 = _plan_summary_text(result.plan)
+                            st.write(msg2)
+                            append_message("assistant", msg2)
 
         plan_result = st.session_state.get("last_plan_result")
         selected_plan = None
@@ -564,6 +569,9 @@ def main():
             st.rerun()
 
     preview_enabled = st.session_state.get("preview_enabled", True)
+    if not st.session_state.get("processing") and st.session_state.get("queued_preview_file"):
+        st.session_state["preview_file"] = st.session_state.pop("queued_preview_file")
+        st.session_state.pop("preview_notice", None)
     preview_path = st.session_state.get("preview_file", "")
     if preview_enabled and preview_path:
         st.subheader("文件预览")
@@ -577,6 +585,9 @@ def main():
                 st.info("文件为空或无法显示（可能为二进制或内容过大）。")
             else:
                 st.text_area("文件内容预览", text, height=260, disabled=True, label_visibility="collapsed")
+    notice = st.session_state.get("preview_notice")
+    if notice:
+        st.info(notice)
 
 
 if __name__ == "__main__":
