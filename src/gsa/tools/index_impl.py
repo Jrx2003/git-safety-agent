@@ -176,8 +176,11 @@ class IndexTool:
             if src and src not in sources:
                 sources.append(src)
             text = d.page_content or ""
-            if len(text) > 1200:
-                text = text[:1200] + "\n...<片段截断>"
+            if len(text) > 2000:
+                cut = text.rfind("\n", 0, 2000)
+                if cut < 400:
+                    cut = 2000
+                text = text[:cut] + "\n...<片段截断>"
             snippets.append({"source": src, "content": text})
         return {"ok": True, "answer": answer, "sources": sources, "snippets": snippets}
 

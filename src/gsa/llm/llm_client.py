@@ -76,6 +76,8 @@ def load_config(workspace: Optional[str] = None) -> LLMConfig:
             continue
 
     cfg.api_key = api_key
+    # 强制禁用深度思考
+    cfg.thinking_enabled = False
     return cfg
 
 
@@ -101,6 +103,7 @@ class LLMClient:
 
     def __init__(self, config: Optional[LLMConfig] = None):
         self.config = config or LLMConfig()
+        self.config.thinking_enabled = False
         self._client = None
 
     def _ensure_key(self) -> None:
@@ -135,7 +138,7 @@ class LLMClient:
             messages=messages,
             temperature=temperature if temperature is not None else self.config.temperature,
             max_tokens=max_tokens if max_tokens is not None else self.config.max_tokens,
-            thinking={"type": "enabled"} if self.config.thinking_enabled else None,
+            thinking=None,
         )
 
     def chat_text(
@@ -160,7 +163,7 @@ class LLMClient:
             messages=messages,
             temperature=temperature if temperature is not None else self.config.temperature,
             max_tokens=max_tokens if max_tokens is not None else self.config.max_tokens,
-            thinking={"type": "enabled"} if self.config.thinking_enabled else None,
+            thinking=None,
             stream=True,
         )
         for chunk in response:

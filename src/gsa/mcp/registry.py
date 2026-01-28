@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable, Dict
+import inspect
 
 
 @dataclass
@@ -26,7 +27,12 @@ class ToolRegistry:
     def call(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if name not in self._tools:
             raise ValueError(f"未注册工具：{name}")
-        return self._tools[name].func(**args)
+        func = self._tools[name].func
+        sig = inspect.signature(func)
+        if any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
+            return func(**args)
+        filtered = {k: v for k, v in (args or {}).items() if k in sig.parameters}
+        return func(**filtered)
 
     def names(self):
         return list(self._tools.keys())

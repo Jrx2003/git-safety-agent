@@ -45,7 +45,14 @@ def cmd_ui(args: argparse.Namespace) -> None:
     import gsa.app.ui as ui_module
 
     ui_path = os.path.abspath(ui_module.__file__)
-    subprocess.run(["streamlit", "run", ui_path], env=env)
+    cmd = ["streamlit", "run", ui_path]
+    try:
+        import watchdog  # type: ignore
+
+        cmd.append("--server.fileWatcherType=watchdog")
+    except Exception:
+        pass
+    subprocess.run(cmd, env=env)
 
 
 def cmd_api(args: argparse.Namespace) -> None:

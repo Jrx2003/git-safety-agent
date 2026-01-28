@@ -46,10 +46,12 @@ class GitTool:
         proc = self._run(args)
         return {"ok": proc.returncode == 0, "stdout": proc.stdout, "stderr": proc.stderr}
 
-    def log(self, n: int = 10, dry_run: bool = True) -> Dict[str, object]:
+    def log(self, n: int = 10, limit: Optional[int] = None, dry_run: bool = True) -> Dict[str, object]:
         err = self._ensure_repo()
         if err:
             return {"ok": False, "error": err}
+        if limit is not None:
+            n = limit
         n = min(max(int(n), 1), 50)
         proc = self._run(["log", f"-{n}", "--pretty=format:%h|%an|%ad|%s", "--date=short"])
         return {"ok": proc.returncode == 0, "stdout": proc.stdout, "stderr": proc.stderr}
@@ -57,6 +59,7 @@ class GitTool:
     def log_graph(
         self,
         n: int = 30,
+        limit: Optional[int] = None,
         author: Optional[str] = None,
         path: Optional[str] = None,
         branch: Optional[str] = None,
@@ -65,6 +68,8 @@ class GitTool:
         err = self._ensure_repo()
         if err:
             return {"ok": False, "error": err}
+        if limit is not None:
+            n = limit
         n = min(max(int(n), 1), 80)
         args = [
             "log",
