@@ -167,14 +167,19 @@ class IndexTool:
         if not vs:
             return {"ok": False, "error": "索引不存在"}
         docs = vs.similarity_search(query, k=top_k)
-        context = "\n".join([f"[{i+1}] {d.page_content[:400]}" for i, d in enumerate(docs)])
+        context = "\n".join([f"[{i+1}] {d.page_content}" for i, d in enumerate(docs)])
         answer = self._llm_or_rule_qa(query, context)
         sources = []
+        snippets = []
         for d in docs:
             src = d.metadata.get("source") or ""
             if src and src not in sources:
                 sources.append(src)
-        return {"ok": True, "answer": answer, "sources": sources}
+            text = d.page_content or ""
+            if len(text) > 1200:
+                text = text[:1200] + "\n...<片段截断>"
+            snippets.append({"source": src, "content": text})
+        return {"ok": True, "answer": answer, "sources": sources, "snippets": snippets}
 
     def _llm_or_rule_summary(self, context: str) -> str:
         client = LLMClient(load_config(self.workspace))

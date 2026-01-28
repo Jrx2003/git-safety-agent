@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import re
+import uuid
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
@@ -195,7 +196,18 @@ def _handle_chat_request(orch: Orchestrator, user_input: str, chat_mode: str) ->
                 else:
                     answer = res.get("answer", "")
                     sources = res.get("sources", [])
+                    snippets = res.get("snippets", [])
                     _render_qa_answer(answer, sources, user_input)
+                    if snippets:
+                        with st.expander("相关片段", expanded=False):
+                            for snip in snippets:
+                                src = snip.get("source") or "未知来源"
+                                text = snip.get("content", "")
+                                st.markdown(f"**{src}**")
+                                if _is_code_like(text, user_input):
+                                    st.code(text, language="text")
+                                else:
+                                    st.write(text)
                     msg = answer
                     if sources:
                         msg += "\n\n参考文件：\n" + "\n".join([f"- {s}" for s in sources])
@@ -354,18 +366,22 @@ def main():
     user_input = st.chat_input("输入自然语言任务...")
     if user_input:
         chat_mode = st.session_state.get("chat_mode", "计划执行")
-        append_message("user", user_input)
-        st.session_state["pending_request"] = {"input": user_input, "mode": chat_mode}
-        st.session_state["run_request"] = True
+        prefix = "计划执行" if chat_mode == "计划执行" else "索引问答"
+        append_message("user", f"{prefix}：{user_input}")
+        st.session_state["pending_request"] = {
+            "id": uuid.uuid4().hex,
+            "input": user_input,
+            "mode": chat_mode,
+        }
+        st.session_state["pending_request_handled"] = False
         st.rerun()
 
-    if st.session_state.get("run_request") and st.session_state.get("pending_request"):
+    if st.session_state.get("pending_request") and not st.session_state.get("pending_request_handled"):
         req = st.session_state.get("pending_request", {})
         try:
             _handle_chat_request(orch, req.get("input", ""), req.get("mode", "计划执行"))
         finally:
-            st.session_state["run_request"] = False
-            st.session_state["pending_request"] = None
+            st.session_state["pending_request_handled"] = True
 
     suggestions = st.session_state.get("last_suggestions")
     if suggestions:
@@ -443,20 +459,6 @@ def main():
         except Exception:
             pass
 
-    preview_enabled = st.session_state.get("preview_enabled", True)
-    preview_path = st.session_state.get("preview_file", "")
-    if preview_enabled and preview_path:
-        st.caption(f"预览：{preview_path}")
-        content = orch.mcp.call_tool("file_read", {"path": preview_path})
-        if not content.get("ok", True):
-            st.error(content.get("error", "读取失败"))
-        else:
-            text = content.get("content", "")
-            if not text:
-                st.info("文件为空或无法显示（可能为二进制或内容过大）。")
-            else:
-                st.code(text, language="text")
-
     if st.session_state.get("need_index"):
         st.subheader("索引提示")
         st.info(st.session_state.get("need_index_msg", "需要先构建索引。"))
@@ -477,6 +479,21 @@ def main():
                 msg = res.get("error", "索引构建失败")
             st.write(msg)
             append_message("assistant", msg)
+
+    preview_enabled = st.session_state.get("preview_enabled", True)
+    preview_path = st.session_state.get("preview_file", "")
+    if preview_enabled and preview_path:
+        st.subheader("文件预览")
+        st.caption(f"预览：{preview_path}")
+        content = orch.mcp.call_tool("file_read", {"path": preview_path})
+        if not content.get("ok", True):
+            st.error(content.get("error", "读取失败"))
+        else:
+            text = content.get("content", "")
+            if not text:
+                st.info("文件为空或无法显示（可能为二进制或内容过大）。")
+            else:
+                st.code(text, language="text")
 
 
 if __name__ == "__main__":
