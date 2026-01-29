@@ -1,11 +1,30 @@
-# Git Safety Agent
+# Git Safety Agent（GSA）
 
-一个“可控、可观测、可评测”的工程化 Agent 系统，支持自然语言驱动的 Git 操作、有限本地文件读写、目录语义理解与文件整理建议，并提供本地 GUI/Web 界面。
+一个安全优先、工程化落地的本地 Agent：将自然语言任务转成结构化计划（Plan），在校验与确认后，通过受限工具执行 Git/文件/索引相关操作，并产出可追溯的日志与变更报告。
 
-目标对齐：
-- 证明具备 Agent 核心能力研发（规划、校验、执行、总结）
-- 强调工程化：可控（安全策略）、可观测（日志/trace）、可评测（测试与评测）
-- 具备 GUI，可视化目录结构、Git 历史、执行计划与风险提示
+- **可控**：危险 git 操作拦截；写操作默认 `dry-run`，需 `YES` 二次确认才会落地
+- **可观测**：`trace_id`、JSONL 事件日志、`changes.md`、`last_run_summary.json`
+- **可评测**：无 Key 可降级规则规划；内置评测用例与 runner
+- **多入口**：CLI / Streamlit GUI / FastAPI
+
+## 界面截图
+
+<details>
+<summary>点击展开</summary>
+
+**对话区：自然语言输入、计划摘要与澄清追问**
+
+<img src="images/对话区.jpg" alt="对话区" width="900" />
+
+**执行区：步骤选择、风险提示、YES 确认与执行结果**
+
+<img src="images/执行区.jpg" alt="执行区" width="900" />
+
+**文件预览：安全沙箱内读取与预览文件内容**
+
+<img src="images/文件预览.jpg" alt="文件预览" width="900" />
+
+</details>
 
 ## 架构图（ASCII）
 
@@ -30,12 +49,31 @@
 
 ## 关键特性
 
-- **可控**：禁止危险 git 操作（reset --hard/clean -fd/force push），写操作必须 YES 二次确认 + 试运行预览。
-- **可观测**：每次运行生成 trace_id + JSONL 事件日志 + changes.md 摘要。
-- **可评测**：提供 eval/test_cases.yaml 与 runner，可在无 key 下运行规则规划器。
+- **可控**：禁止危险 git 操作（`reset --hard` / `clean -fd` / `push --force` 等）；写操作必须 YES 二次确认 + 试运行预览。
+- **可观测**：每次运行生成 `trace_id` + JSONL 事件日志 + `changes.md` 摘要。
+- **可评测**：提供 `src/gsa/eval/test_cases.yaml` 与 runner，可在无 Key 下运行规则规划器。
 - **MCP 支持**：实现 MCP Server/Client（stdio JSON-RPC 兼容层），工具统一注册与调用。
-- **LangChain 索引**：本地目录切片、索引、搜索与摘要，支持目录整理建议。
+- **索引能力**：本地目录切片、索引、搜索与摘要，支持目录整理建议与“索引问答”。
 - **对话式 UI**：规划/执行在对话区可追溯，支持步骤复选执行。
+
+## 目录结构（推荐面试讲法）
+
+```
+git-safety-agent/
+  src/gsa/
+    agent/           # Planner/Orchestrator/Schema/Memory（规划->校验->执行->总结）
+    mcp/             # 最小 MCP 兼容层（stdio JSON-RPC）：server/client/registry
+    tools/           # Git/File/Index 工具实现（受策略约束）
+    safety/          # 风险评估、策略校验、二次确认（YES）、写操作上限
+    observability/   # trace_id、JSONL 事件日志、changes 与执行摘要
+    llm/             # LLM Client + Prompt（Key 缺失自动降级为规则规划）
+    app/             # Streamlit GUI + FastAPI
+    eval/            # 规则规划评测用例与 runner（无 Key 也能跑）
+  tests/             # 单元测试（policy/risk/validator）
+  examples/          # 示例输入
+  images/            # README 截图
+  .gsa/              # 运行产物：logs/index/memory/changes（用于可观测与可追溯）
+```
 
 ## 安全策略与防误用设计（示例）
 
@@ -48,7 +86,7 @@
 
 ## GUI 使用说明
 
-运行 `gsa ui` 后，可看到：
+运行 `gsa ui`（或 `python -m gsa.cli ui`）后，可看到：
 - 任务输入框：固定边栏，支持整段自然语言
 - 计划面板：展示 JSON 计划（含 risk），支持步骤复选框选择执行
 - 执行控制：YES 确认、执行/试运行按钮
@@ -72,11 +110,11 @@
 - 切片：RecursiveCharacterTextSplitter
 - 向量库：FAISS（本地）
 - 检索：相似度搜索
-- 总结/建议：有 Key 时使用 LLM，无 Key 时使用规则摘要
+- 总结/建议：有 Key 时使用 LLM，无 Key 时使用规则摘要（用于 demo/可跑通）
 
 ## GLM-4.7 API Key 配置
 
-**必须模型：`glm-4.7`**，使用官方 `zai-sdk` 调用
+默认模型为 `glm-4.7`（UI 可切换 `glm-4.7-flash`），使用官方 `zai-sdk` 调用。
 
 可选配置方式（优先级：环境变量 > config.yaml）：
 1) 环境变量
@@ -104,7 +142,7 @@ pip install zai-sdk
 
 高级配置（可选，写在 config.yaml 或环境变量）：
 ```
-GLM_BASE_URL: "https://api.z.ai/api/paas/v4/"
+GLM_BASE_URL: "https://api.z.ai/api/paas/v4/"   # 或 https://open.bigmodel.cn/api/paas/v4/
 GLM_MODEL: "glm-4.7"          # 可改为 glm-4.7-flash
 GLM_TIMEOUT: 300
 GLM_CONNECT_TIMEOUT: 8
@@ -117,10 +155,12 @@ GLM_THINKING_ENABLED: true
 说明：
 - 中国大陆默认使用 `https://open.bigmodel.cn/api/paas/v4/`（ZhipuAiClient）
 - 海外默认使用 `https://api.z.ai/api/paas/v4/`（ZaiClient）
-- 可通过环境变量 `ZAI_BASE_URL` 覆盖
+- 可通过环境变量 `ZAI_BASE_URL` / `BIGMODEL_BASE_URL` 覆盖
 - UI 侧边栏可直接切换接口地址与模型
 
 ## 如何运行
+
+前置：Python >= 3.10。
 
 ### 1) 安装
 ```
@@ -131,20 +171,23 @@ pip install -e .[dev]
 ### 2) CLI
 ```
 # 生成计划
-python -m gsa.cli plan --input "看看当前仓库状态"
+gsa plan --input "看看当前仓库状态"
 
 # 生成并执行（需要 --yes 才会真正写）
-python -m gsa.cli run --input "暂存所有改动" --yes
+gsa run --input "暂存所有改动" --yes
+
+# 不使用 LLM（强制规则规划，便于离线演示/评测）
+gsa plan --no-use-llm --input "查看最近提交历史"
 ```
 
 ### 3) GUI
 ```
-python -m gsa.cli ui
+gsa ui
 ```
 
 ### 4) API（可选）
 ```
-python -m gsa.cli api --port 8000
+gsa api --port 8000
 ```
 
 ## 如何运行测试与评测
