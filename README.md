@@ -162,6 +162,21 @@ GLM_THINKING_ENABLED: true
 
 前置：Python >= 3.10。
 
+### 快速体验（3 分钟）
+
+适合第一次试跑，验证“计划→确认→执行”的完整链路。
+
+```
+# 1) 生成计划（不会修改）
+gsa plan --input "查看当前仓库状态并给出风险提示"
+
+# 2) 试运行（仍不会修改）
+gsa run --input "查看最近 3 次提交" 
+
+# 3) 显式确认后执行写操作
+gsa run --input "创建一个 demo 目录" --yes
+```
+
 ### 1) 安装
 ```
 cd git-safety-agent
