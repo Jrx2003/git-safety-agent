@@ -4,15 +4,25 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+*.egg-info/
 
 # Env
 .env
+.env.*
+!.env.example
 .venv/
 venv/
+uv.lock
 
 # Config & secrets
 config.yaml
 .gsa/
+*.pem
+*.key
+id_rsa
+id_ed25519
+secrets.json
+tokens.json
 
 # macOS
 .DS_Store
@@ -22,3 +32,4 @@ config.yaml
 
 # Node (if any)
 node_modules/
+web/dist/

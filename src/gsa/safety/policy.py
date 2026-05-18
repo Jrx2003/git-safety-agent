@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import os
 from typing import Iterable, List, Tuple
 
@@ -14,6 +15,21 @@ BLOCKED_GIT_ARGS = {
 SENSITIVE_NAMES = {
     ".env",
     ".env.local",
+    "id_rsa",
+    "id_ed25519",
+    "secrets.json",
+    "tokens.json",
+}
+
+SENSITIVE_EXEMPT_NAMES = {
+    ".env.example",
+}
+
+SENSITIVE_PATTERNS = {
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
     "id_rsa",
     "id_ed25519",
     "secrets.json",
@@ -40,8 +56,17 @@ def ensure_in_workspace(workspace: str, target: str) -> str:
 
 def deny_if_sensitive(path: str) -> None:
     name = os.path.basename(path)
-    if name in SENSITIVE_NAMES:
+    if is_sensitive_path(path):
         raise PolicyError(f"拒绝访问敏感文件：{name}")
+
+
+def is_sensitive_path(path: str) -> bool:
+    name = os.path.basename(path)
+    if name in SENSITIVE_EXEMPT_NAMES:
+        return False
+    if name in SENSITIVE_NAMES:
+        return True
+    return any(fnmatch.fnmatch(name, pattern) for pattern in SENSITIVE_PATTERNS)
 
 
 def validate_git_args(args: Iterable[str]) -> None:

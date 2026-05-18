@@ -5,8 +5,12 @@ import os
 from datetime import datetime
 from typing import Any, Dict, List
 
+from gsa.security.redaction import redact_secrets
+
 
 def write_run_report(workspace: str, trace_id: str, summary: str, steps: List[Dict[str, Any]]) -> None:
+    summary = redact_secrets(summary)
+    steps = redact_secrets(steps)
     os.makedirs(os.path.join(workspace, ".gsa"), exist_ok=True)
     changes_path = os.path.join(workspace, ".gsa", "changes.md")
     with open(changes_path, "w", encoding="utf-8") as f:

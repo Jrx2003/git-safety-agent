@@ -1,233 +1,365 @@
-# Git Safety Agent（GSA）
+# Git Safety Agent (GSA)
 
-一个安全优先、工程化落地的本地 Agent：将自然语言任务转成结构化计划（Plan），在校验与确认后，通过受限工具执行 Git/文件/索引相关操作，并产出可追溯的日志与变更报告。
+GSA 是一个面向本地开发者与 Codex 使用者的 **GitHub 协作安全代理**。
 
-- **可控**：危险 git 操作拦截；写操作默认 `dry-run`，需 `YES` 二次确认才会落地
-- **可观测**：`trace_id`、JSONL 事件日志、`changes.md`、`last_run_summary.json`
-- **可评测**：无 Key 可降级规则规划；内置评测用例与 runner
-- **多入口**：CLI / Streamlit GUI / FastAPI
+它不尝试替代 Codex 写代码，也不做完整 coding agent。它解决的是另一段真实工作流：
 
-## 界面截图
+> 代码已经由人或 Codex 改好了，但提交、推送、开 PR、关联 issue、检查协作状态这些 GitHub 操作仍然容易出错。GSA 负责把这些动作变成可解释、可确认、可审计的安全流程。
 
-<details>
-<summary>点击展开</summary>
+## 为什么需要 GSA
 
-**对话区：自然语言输入、计划摘要与澄清追问**
+最初使用 Codex 时，常见协作方式是：
 
-<img src="images/对话区.jpg" alt="对话区" width="900" />
+1. Codex 修改代码或给出一串 Git 命令。
+2. 开发者手动执行 `git add`、`git commit`、`git push`、`gh pr create`。
+3. 开发者需要自己判断命令是否安全、分支是否正确、是否会误提交敏感文件、是否会污染保护分支或覆盖别人提交。
 
-**执行区：步骤选择、风险提示、YES 确认与执行结果**
+这个过程对个人项目还可以接受，但放到 GitHub 协作里风险很高：
 
-<img src="images/执行区.jpg" alt="执行区" width="900" />
+- 不确定当前分支是否应该推送。
+- 不确定本地分支和远端是否分叉。
+- 不确定 Codex 改动里是否混入临时文件、密钥或无关文件。
+- 不确定 commit message、PR title、PR body 是否能准确关联 issue。
+- 不确定 PR 是否已经 ready for review。
 
-**文件预览：安全沙箱内读取与预览文件内容**
+GSA 的目标是补齐 Codex 在 GitHub 协作中的“最后一公里”：**不写业务代码，只接管协作动作的安全执行层**。
 
-<img src="images/文件预览.jpg" alt="文件预览" width="900" />
+## 产品边界
 
-</details>
+GSA 做：
 
-## 架构图（ASCII）
+- 提交前检查本地状态、diff、暂存区、敏感文件和风险操作。
+- 根据 issue/PR 上下文生成分支名、commit message、PR title/body。
+- 安全创建分支、提交、推送、创建 draft PR。
+- 检查 PR 的 CI、review、unresolved comments、本地未推送提交等协作状态。
+- 记录每一步计划、确认、命令、结果和 trace，方便审计与回放。
 
+GSA 不做：
+
+- 不自动实现 issue。
+- 不自动修复 CI。
+- 不自动解决 review comments。
+- 不直接 merge PR。
+- 不让 LLM 自由执行 shell。
+- 不把 GitHub MCP 当作产品本身。GitHub MCP 或 `gh` 是上下文与执行工具，GSA 的价值是任务级 workflow、安全策略和审计轨迹。
+
+## 核心场景
+
+### 1. Safe Commit Workflow
+
+用户输入：
+
+```text
+帮我提交这次 Codex 改动
 ```
+
+GSA 应该执行：
+
+1. 读取当前分支、工作区状态、暂存区和未暂存 diff。
+2. 检查是否包含 `.env`、token、密钥、构建产物、临时文件。
+3. 判断是否存在“多主题改动”，提示是否需要拆分 commit。
+4. 生成 commit message 候选。
+5. dry-run 展示将暂存和提交的文件。
+6. 用户确认后执行 `git add` 和 `git commit`。
+
+### 2. Issue Branch Workflow
+
+用户输入：
+
+```text
+基于 issue #123 开一个修复分支
+```
+
+GSA 应该执行：
+
+1. 通过 `gh issue view 123` 或 GitHub MCP 读取 issue 标题、描述、标签和关联信息。
+2. 从 issue 生成安全分支名，例如 `fix/123-login-timeout`。
+3. 检查当前工作区是否干净。
+4. 确认 base branch，例如 `main` 或仓库默认分支。
+5. 创建并切换分支。
+6. 将 issue 摘要写入本次 session trace，供后续 commit/PR 使用。
+
+### 3. Safe Push And Draft PR Workflow
+
+用户输入：
+
+```text
+帮我推上去并开 draft PR
+```
+
+GSA 应该执行：
+
+1. 拒绝直接推送 `main`、`master`、`develop` 等保护分支。
+2. 检查本地分支是否落后或分叉于远端。
+3. 检查是否存在未提交改动。
+4. push 当前分支到远端。
+5. 创建 draft PR，并自动生成 PR body：
+   - What changed
+   - Why
+   - Validation
+   - Risk
+   - Related issue
+6. 输出 PR 链接和下一步建议。
+
+### 4. PR Readiness Workflow
+
+用户输入：
+
+```text
+这个 PR 现在能交给 reviewer 吗？
+```
+
+GSA 应该执行：
+
+1. 读取 PR 状态、CI 状态、review 状态和 unresolved comments。
+2. 检查本地是否还有未提交或未推送改动。
+3. 检查 PR 描述是否缺少验证说明或 issue 关联。
+4. 输出 readiness report：
+   - Ready
+   - Blocked
+   - Needs action
+
+## 当前实现状态
+
+当前主线已经从“自然语言工具原型”推进到 **React 工作台 + FastAPI workflow API**。
+
+已具备：
+
+- React/Vite 工作台：Overview、Safe Commit、Issue Branch、Push & Draft PR、PR Readiness、Trace。
+- FastAPI 任务级 API：前端只调用 workflow endpoint，不直接拼 Git/GitHub 命令。
+- `gh` CLI provider：MVP 通过结构化 `gh --json` 读取 issue、PR、checks 和已有 PR。
+- Safe Commit：分组展示 staged/unstaged 文件、敏感文件阻断、diff summary、确认后 commit。
+- Issue Branch：读取 issue 元数据、生成包含 issue 编号的分支名、脏工作区阻断、确认后创建分支。
+- Push & Draft PR：保护分支阻断、dirty 阻断、ahead/behind 检查、已有 PR 检测、确认后 push 并创建 draft PR。
+- PR Readiness：汇总 PR、CI/checks、review、本地未推送提交和本地 dirty 状态。
+- Trace：记录 plan、风险、命令预览、执行结果和 GitHub URL，输出前统一脱敏。
+- CLI 兼容入口：`gsa env`、`gsa commit-plan`、`gsa commit --yes`、`gsa issue-branch`、`gsa push-pr`、`gsa pr-ready`、`gsa trace show`。
+- Streamlit 旧界面保留为 legacy：`gsa ui`。
+
+仍不做：
+
+- 不实现 GitHub issue。
+- 不自动修 CI。
+- 不自动处理 review comment。
+- 不 merge。
+- 不把 LLM 接到任意 shell。
+
+## 架构主线
+
+Legacy agent runtime：
+
+```text
 用户输入
-   │
-   ▼
-[Planner(LLM/规则)] -> Plan(JSON)
-   │           │
-   │           └─ 校验/风险/确认
-   ▼
-[Orchestrator] ──> MCP Client ──(stdio)──> MCP Server
-                               │
-                               ├─ Git Tools
-                               ├─ File Tools
-                               └─ Index Tools (LangChain)
-   │
-   ├─ 事件日志(JSONL)
-   ├─ 变更报告(changes.md)
-   └─ Memory(会话+持久化)
+  |
+  v
+Planner(LLM/规则) -> Plan(JSON)
+  |
+  v
+Safety Validator -> Risk Policy -> Confirmation
+  |
+  v
+Orchestrator -> MCP Client -> MCP Server
+                         |
+                         +-- Git Tools
+                         +-- File Tools
+                         +-- Index Tools
+  |
+  +-- JSONL Trace
+  +-- changes.md
+  +-- last_run_summary.json
 ```
 
-## 关键特性
+当前 GitHub workflow runtime：
 
-- **可控**：禁止危险 git 操作（`reset --hard` / `clean -fd` / `push --force` 等）；写操作必须 YES 二次确认 + 试运行预览。
-- **可观测**：每次运行生成 `trace_id` + JSONL 事件日志 + `changes.md` 摘要。
-- **可评测**：提供 `src/gsa/eval/test_cases.yaml` 与 runner，可在无 Key 下运行规则规划器。
-- **MCP 支持**：实现 MCP Server/Client（stdio JSON-RPC 兼容层），工具统一注册与调用。
-- **索引能力**：本地目录切片、索引、搜索与摘要，支持目录整理建议与“索引问答”。
-- **对话式 UI**：规划/执行在对话区可追溯，支持步骤复选执行。
-
-## 目录结构（推荐面试讲法）
-
+```text
+用户 / Codex 完成代码改动
+  |
+  v
+GSA Session
+  |
+  +-- Local Git Snapshot
+  +-- GitHub Issue / PR Context
+  +-- Safety Policy
+  +-- Confirmation Gate
+  |
+  v
+Workflow Runtime
+  |
+  +-- Safe Commit
+  +-- Issue Branch
+  +-- Safe Push + Draft PR
+  +-- PR Readiness
+  |
+  v
+Git / gh
+  |
+  v
+Audit Trace + GitHub Collaboration Result
 ```
+
+GitHub provider 当前使用 `gh` CLI。后续可以替换为 GitHub MCP，但 workflow API 不需要变化。
+
+## 目录结构
+
+```text
 git-safety-agent/
   src/gsa/
-    agent/           # Planner/Orchestrator/Schema/Memory（规划->校验->执行->总结）
-    mcp/             # 最小 MCP 兼容层（stdio JSON-RPC）：server/client/registry
-    tools/           # Git/File/Index 工具实现（受策略约束）
-    safety/          # 风险评估、策略校验、二次确认（YES）、写操作上限
-    observability/   # trace_id、JSONL 事件日志、changes 与执行摘要
-    llm/             # LLM Client + Prompt（Key 缺失自动降级为规则规划）
-    app/             # Streamlit GUI + FastAPI
-    eval/            # 规则规划评测用例与 runner（无 Key 也能跑）
-  tests/             # 单元测试（policy/risk/validator）
+    agent/           # Planner / Orchestrator / Schema / Memory
+    mcp/             # 当前最小 MCP 兼容层
+    tools/           # Git / File / Index 工具实现
+    safety/          # 风险评估、策略校验、二次确认
+    security/        # secret 注册与统一脱敏
+    github/          # gh CLI provider
+    workflows/       # Safe Commit / Issue Branch / Push PR / PR Readiness
+    observability/   # trace_id、JSONL 日志、执行摘要
+    llm/             # LLM Client 和 Prompt
+    app/             # FastAPI 和 legacy Streamlit
+    eval/            # 规则规划评测用例与 runner
+  web/               # React/Vite 工作台
+  docs/              # 产品需求、设计取舍、场景、路线图
+  tests/             # safety 相关单元测试
   examples/          # 示例输入
   images/            # README 截图
-  .gsa/              # 运行产物：logs/index/memory/changes（用于可观测与可追溯）
 ```
 
-## 安全策略与防误用设计（示例）
+## 文档导航
 
-- **黑名单**：reset --hard / clean -fd / push --force 一律拒绝。
-- **Sandbox**：文件操作仅限 workspace，realpath 校验阻止路径逃逸。
-- **二次确认**：medium/high 风险步骤必须 YES。
-- **试运行**：写操作默认试运行，展示 diff 或影响范围。
-- **歧义追问**：信息不足时返回 questions，不允许猜测执行。
-- **变更上限**：单次写步骤 >10 直接拒绝。
+- [Product Requirements](docs/PRODUCT_REQUIREMENTS.md)：产品定位、目标用户、核心需求和非目标。
+- [User Scenarios](docs/USER_SCENARIOS.md)：围绕 Codex + GitHub 协作的真实任务场景。
+- [Design Rationale](docs/DESIGN_RATIONALE.md)：需求演进、产品边界和架构取舍。
+- [Roadmap](docs/ROADMAP.md)：从当前原型到 GitHub 协作安全代理的迭代计划。
 
-## GUI 使用说明
+## 安全策略
 
-运行 `gsa ui`（或 `python -m gsa.cli ui`）后，可看到：
-- 任务输入框：固定边栏，支持整段自然语言
-- 计划面板：展示 JSON 计划（含 risk），支持步骤复选框选择执行
-- 执行控制：YES 确认、执行/试运行按钮
-- 建议与提示：questions/风险提示
-- 目录结构：左侧树状目录（支持搜索/展开）
-- Git 历史：最近提交图形日志
-- 日志：trace_id 与最近日志内容
-- 默认使用 LLM，如未配置 API Key 将自动降级为规则规划
-- 对话模式：计划执行 / 索引问答
-- 侧边栏快捷按钮：一键仓库概览 / 一键整理建议（结果写入对话区）
-- 整理建议可一键转成可执行计划
+GSA 的安全策略不是为了限制用户，而是为了让高风险协作动作显式化。
 
-界面细节：
-- 输入框固定底部，覆盖主区域宽度
-- 模型处理中禁止再次提交
-- 仓库概览/整理建议以“对话形式”展示过程与结果
+- 写操作默认 dry-run。
+- medium/high 风险操作必须确认。
+- 禁止危险 Git 命令，如 `reset --hard`、`clean -fd`、`push --force`。
+- 文件操作限制在 workspace 内。
+- 拒绝访问常见敏感文件，如 `.env`、私钥、token 文件。
+- 单次写步骤设置上限，避免一次计划产生过大破坏面。
+- 信息不足时追问，不猜测执行。
 
-## LangChain 索引/搜索/摘要
-
-- 加载：DirectoryLoader + TextLoader（仅文本后缀）
-- 切片：RecursiveCharacterTextSplitter
-- 向量库：FAISS（本地）
-- 检索：相似度搜索
-- 总结/建议：有 Key 时使用 LLM，无 Key 时使用规则摘要（用于 demo/可跑通）
-
-## GLM-4.7 API Key 配置
-
-默认模型为 `glm-4.7`（UI 可切换 `glm-4.7-flash`），使用官方 `zai-sdk` 调用。
-
-可选配置方式（优先级：环境变量 > config.yaml）：
-1) 环境变量
-```
-export BIGMODEL_API_KEY=""
-```
-或
-```
-export ZAI_API_KEY=""
-```
-2) config.yaml（留空占位）
-```
-# config.yaml
-BIGMODEL_API_KEY: ""
-```
-
-未配置 key 时：系统使用规则规划器 + 规则摘要，保证 demo 可运行。
-
-如需启用最新 SDK（推荐）：
-```
-pip install zai-sdk
-```
-
-注意：启动 UI 的 Python 环境必须与安装 zai-sdk 的环境一致。
-
-高级配置（可选，写在 config.yaml 或环境变量）：
-```
-GLM_BASE_URL: "https://api.z.ai/api/paas/v4/"   # 或 https://open.bigmodel.cn/api/paas/v4/
-GLM_MODEL: "glm-4.7"          # 可改为 glm-4.7-flash
-GLM_TIMEOUT: 300
-GLM_CONNECT_TIMEOUT: 8
-GLM_MAX_RETRIES: 2
-GLM_MAX_TOKENS: 65536
-GLM_TEMPERATURE: 1.0
-GLM_THINKING_ENABLED: true
-```
-
-说明：
-- 中国大陆默认使用 `https://open.bigmodel.cn/api/paas/v4/`（ZhipuAiClient）
-- 海外默认使用 `https://api.z.ai/api/paas/v4/`（ZaiClient）
-- 可通过环境变量 `ZAI_BASE_URL` / `BIGMODEL_BASE_URL` 覆盖
-- UI 侧边栏可直接切换接口地址与模型
-
-## 如何运行
+## 运行方式
 
 前置：Python >= 3.10。
 
-### 快速体验（3 分钟）
+### 安装
 
-适合第一次试跑，验证“计划→确认→执行”的完整链路。
-
-```
-# 1) 生成计划（不会修改）
-gsa plan --input "查看当前仓库状态并给出风险提示"
-
-# 2) 试运行（仍不会修改）
-gsa run --input "查看最近 3 次提交" 
-
-# 3) 显式确认后执行写操作
-gsa run --input "创建一个 demo 目录" --yes
-```
-
-### 1) 安装
-```
+```bash
 cd git-safety-agent
 pip install -e .[dev]
+npm --prefix web install
 ```
 
-### 2) CLI
-```
-# 生成计划
-gsa plan --input "看看当前仓库状态"
+### React 工作台
 
-# 生成并执行（需要 --yes 才会真正写）
+推荐入口：
+
+```bash
+gsa web
+```
+
+默认启动：
+
+- API: `http://127.0.0.1:8000`
+- Web: `http://127.0.0.1:5173`
+
+也可以拆开启动：
+
+```bash
+gsa api --host 127.0.0.1 --port 8000
+npm --prefix web run dev
+```
+
+### Workflow CLI
+
+```bash
+gsa env
+
+gsa commit-plan --message "Update workflow safety"
+gsa commit --message "Update workflow safety" --yes
+
+gsa issue-branch 123
+gsa issue-branch 123 --yes
+
+gsa push-pr --title "Draft PR: update workflow safety"
+gsa push-pr --title "Draft PR: update workflow safety" --yes
+
+gsa pr-ready
+gsa pr-ready 123
+
+gsa trace list
+gsa trace show <trace_id>
+```
+
+### Legacy CLI / UI
+
+```bash
+# 生成计划，不修改文件
+gsa plan --input "查看当前仓库状态并给出风险提示"
+
+# 试运行，仍不会修改
+gsa run --input "查看最近 3 次提交"
+
+# 写操作需要显式确认
 gsa run --input "暂存所有改动" --yes
 
-# 不使用 LLM（强制规则规划，便于离线演示/评测）
-gsa plan --no-use-llm --input "查看最近提交历史"
-```
-
-### 3) GUI
-```
+# Streamlit legacy UI
 gsa ui
 ```
 
-### 4) API（可选）
-```
-gsa api --port 8000
+## LLM 配置
+
+默认模型为 `glm-4.7`，使用 `zai-sdk` 调用。LLM 只用于文案辅助；Git/GitHub workflow 在没有 LLM 的情况下仍可生成只读计划和执行规则化操作。
+
+后端启动时会读取当前进程环境和 workspace `.env`。`.env` 只在本地后端读取，永不进入前端 bundle，API 也不会返回 key 原文。
+
+```dotenv
+BIGMODEL_API_KEY=
+ZAI_API_KEY=
+GLM_MODEL=glm-4.7
+ZAI_BASE_URL=https://api.z.ai/api/paas/v4/
 ```
 
-## 如何运行测试与评测
+`.env.example` 提供占位说明，不包含任何真实值。
 
-```
+`GET /api/environment` 只返回：
+
+- `configured`
+- `model`
+- `base_url`
+- `provider_label`
+
+不会返回 `api_key`、token 或 Authorization header。
+
+## Secret Safety
+
+GSA 默认把 secret safety 当作 workflow 前置条件：
+
+- `.env`、`.env.*`、`*.pem`、`*.key`、`id_rsa`、`id_ed25519`、`secrets.json`、`tokens.json` 被视为敏感文件；`.env.example` 是只含空占位的例外。
+- 文件读取、索引构建和 Safe Commit 默认拒绝这些文件。
+- logger、trace、API response、CLI output、`changes.md`、`last_run_summary.json` 写出前会调用统一脱敏。
+- 脱敏覆盖已加载的真实 key 值、`api_key`/`token`/`secret`/`password`/`authorization` 字段、Bearer token、`sk-...`、GitHub token 和长 token 字符串。
+
+## 测试与评测
+
+```bash
 pytest -q
+npm --prefix web run build
+npm --prefix web audit --audit-level=moderate
 python -m gsa.eval.runner
 ```
 
-## 示例输入
+评测的重点应从“关键词命中哪个工具”逐步升级为：
 
-更多输入示例见：`examples/demo_inputs.md`
+- 危险 Git 操作是否被拦截。
+- 模糊协作请求是否触发追问。
+- safe commit 是否正确识别敏感文件和暂存区状态。
+- safe push 是否拒绝保护分支和远端分叉风险。
+- PR readiness 是否正确汇总 CI、review、本地状态。
 
-## 失败模式与防护（至少 5 条）
+## 项目总结
 
-1) 未配置 API Key：自动降级为规则规划/摘要。
-2) 规划结果无效 JSON：解析失败后回退规则规划器。
-3) 写操作未确认：仅试运行，不会修改。
-4) 路径越界：realpath 校验直接拒绝。
-5) 索引不存在：提示先构建索引。
-
-## MCP 兼容范围说明
-
-本项目实现“最小 MCP 兼容层”（stdio JSON-RPC 风格），包含：
-- tools/list, tools/call
-- resources/list, resources/read
-
-可与 MCP Client 进行基本工具调用与资源读取；未覆盖完整官方协议扩展。
+GSA 不是 coding agent，而是 Codex 之后的 GitHub 协作安全代理。它把本地代码改动进入 GitHub 的过程，从一串不透明的手动命令，变成带上下文、带风险解释、带确认门禁、带审计轨迹的工程 workflow。

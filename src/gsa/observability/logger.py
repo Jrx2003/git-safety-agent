@@ -5,6 +5,8 @@ import os
 from datetime import datetime
 from typing import Any, Dict
 
+from gsa.security.redaction import redact_secrets
+
 
 class EventLogger:
     """JSONL 事件日志。"""
@@ -22,7 +24,7 @@ class EventLogger:
             "time": datetime.now().isoformat(timespec="seconds"),
             "event": event_type,
             "trace_id": self.trace_id,
-            "payload": payload,
+            "payload": redact_secrets(payload),
         }
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")

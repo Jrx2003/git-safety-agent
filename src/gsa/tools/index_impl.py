@@ -90,7 +90,15 @@ class IndexTool:
         dry_run: bool = True,
     ) -> Dict[str, object]:
         include_globs = include_globs or ["**/*"]
-        exclude_globs = exclude_globs or ["**/.git/**", "**/.gsa/**", "**/node_modules/**"]
+        exclude_globs = exclude_globs or [
+            "**/.git/**",
+            "**/.gsa/**",
+            "**/node_modules/**",
+            "**/.env",
+            "**/.env.*",
+            "**/*.pem",
+            "**/*.key",
+        ]
         _ = self._safe_path(self.workspace)
         docs = self._load_documents(include_globs, exclude_globs)
         splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=overlap)

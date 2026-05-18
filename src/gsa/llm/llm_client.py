@@ -7,6 +7,8 @@ from typing import Any, Dict, Iterable, List, Optional
 import httpx
 import yaml
 
+from gsa.security.redaction import register_secret
+
 
 GLM_MODEL = "glm-4.7"
 
@@ -32,8 +34,14 @@ class LLMKeyMissing(RuntimeError):
 
 def load_config(workspace: Optional[str] = None) -> LLMConfig:
     """从环境变量与 config.yaml 读取配置。"""
+    _load_dotenv(workspace)
     api_key = os.environ.get("BIGMODEL_API_KEY", "") or os.environ.get("ZAI_API_KEY", "")
-    env_base_url = os.environ.get("ZAI_BASE_URL", "") or os.environ.get("BIGMODEL_BASE_URL", "")
+    env_base_url = (
+        os.environ.get("ZAI_BASE_URL", "")
+        or os.environ.get("BIGMODEL_BASE_URL", "")
+        or os.environ.get("GLM_BASE_URL", "")
+        or os.environ.get("GSA_BASE_URL", "")
+    )
     env_model = os.environ.get("GLM_MODEL", "") or os.environ.get("GSA_MODEL", "")
     config_paths = []
     if workspace:
@@ -56,6 +64,7 @@ def load_config(workspace: Optional[str] = None) -> LLMConfig:
             if isinstance(data, dict):
                 if data.get("BIGMODEL_API_KEY"):
                     api_key = str(data.get("BIGMODEL_API_KEY"))
+                    register_secret(api_key)
                 if data.get("GLM_MAX_TOKENS"):
                     cfg.max_tokens = int(data.get("GLM_MAX_TOKENS"))
                 if data.get("GLM_TEMPERATURE"):
@@ -76,9 +85,39 @@ def load_config(workspace: Optional[str] = None) -> LLMConfig:
             continue
 
     cfg.api_key = api_key
+    register_secret(api_key)
     # 强制禁用深度思考
     cfg.thinking_enabled = False
     return cfg
+
+
+def _load_dotenv(workspace: Optional[str]) -> None:
+    if not workspace:
+        return
+    dotenv_path = os.path.join(workspace, ".env")
+    if not os.path.exists(dotenv_path):
+        return
+    try:
+        from dotenv import load_dotenv  # type: ignore
+
+        load_dotenv(dotenv_path, override=False)
+        return
+    except Exception:
+        pass
+    try:
+        with open(dotenv_path, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+                    register_secret(value)
+    except Exception:
+        return
 
 
 def _extract_content(response: Any) -> str:
